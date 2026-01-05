@@ -143,8 +143,6 @@ impl Window {
             &config.window,
             #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
             x11_visual,
-            #[cfg(target_os = "macos")]
-            &options.window_tabbing_id.take(),
         );
 
         if let Some(position) = config.window.position {
@@ -331,17 +329,9 @@ impl Window {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn get_platform_window(
-        _: &Identity,
-        window_config: &WindowConfig,
-        tabbing_id: &Option<String>,
-    ) -> WindowAttributes {
-        let mut window =
+    pub fn get_platform_window(_: &Identity, window_config: &WindowConfig) -> WindowAttributes {
+        let window =
             WinitWindow::default_attributes().with_option_as_alt(window_config.option_as_alt());
-
-        if let Some(tabbing_id) = tabbing_id {
-            window = window.with_tabbing_identifier(tabbing_id);
-        }
 
         match window_config.decorations {
             Decorations::Full => window,
@@ -483,34 +473,6 @@ impl Window {
         view.window().unwrap().setHasShadow(has_shadows);
     }
 
-    /// Select tab at the given `index`.
-    #[cfg(target_os = "macos")]
-    pub fn select_tab_at_index(&self, index: usize) {
-        self.window.select_tab_at_index(index);
-    }
-
-    /// Select the last tab.
-    #[cfg(target_os = "macos")]
-    pub fn select_last_tab(&self) {
-        self.window.select_tab_at_index(self.window.num_tabs() - 1);
-    }
-
-    /// Select next tab.
-    #[cfg(target_os = "macos")]
-    pub fn select_next_tab(&self) {
-        self.window.select_next_tab();
-    }
-
-    /// Select previous tab.
-    #[cfg(target_os = "macos")]
-    pub fn select_previous_tab(&self) {
-        self.window.select_previous_tab();
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn tabbing_id(&self) -> String {
-        self.window.tabbing_identifier()
-    }
 }
 
 bitflags! {

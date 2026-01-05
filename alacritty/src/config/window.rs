@@ -13,8 +13,8 @@ use alacritty_config_derive::{ConfigDeserialize, SerdeReplace};
 use crate::config::LOG_TARGET_CONFIG;
 use crate::config::ui_config::{Delta, Percentage};
 
-/// Default Alacritty name, used for window title and class.
-pub const DEFAULT_NAME: &str = "Alacritty";
+/// Default app name, used for window title and class.
+pub const DEFAULT_NAME: &str = "tablacritty";
 
 #[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct WindowConfig {
@@ -65,6 +65,9 @@ pub struct WindowConfig {
 
     /// Window level.
     pub level: WindowLevel,
+
+    /// Tab panel configuration.
+    pub tab_panel: TabPanelConfig,
 }
 
 impl Default for WindowConfig {
@@ -85,6 +88,7 @@ impl Default for WindowConfig {
             decorations_theme_variant: Default::default(),
             option_as_alt: Default::default(),
             level: Default::default(),
+            tab_panel: Default::default(),
         }
     }
 }
@@ -198,6 +202,24 @@ pub struct Dimensions {
 
     /// Window Height in character lines.
     pub lines: usize,
+}
+
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct TabPanelConfig {
+    /// Whether the tab panel is visible.
+    pub enabled: bool,
+
+    /// Panel width in logical pixels.
+    pub width: usize,
+}
+
+impl Default for TabPanelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            width: 250,
+        }
+    }
 }
 
 /// Window class hint.

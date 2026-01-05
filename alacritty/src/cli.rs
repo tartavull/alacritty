@@ -16,6 +16,7 @@ use crate::config::UiConfig;
 use crate::config::ui_config::Program;
 use crate::config::window::{Class, Identity};
 use crate::logging::LOG_TARGET_IPC_CONFIG;
+use crate::window_kind::WindowKind;
 
 /// CLI options for the main Alacritty executable.
 #[derive(Parser, Default, Debug)]
@@ -296,14 +297,13 @@ pub struct WindowOptions {
     #[clap(flatten)]
     pub terminal_options: TerminalOptions,
 
+    #[clap(skip)]
+    #[serde(default)]
+    pub window_kind: WindowKind,
+
     #[clap(flatten)]
     /// Window options which could be passed via IPC.
     pub window_identity: WindowIdentity,
-
-    #[clap(skip)]
-    #[cfg(target_os = "macos")]
-    /// The window tabbing identifier to use when building a window.
-    pub window_tabbing_id: Option<String>,
 
     #[clap(skip)]
     #[cfg(not(any(target_os = "macos", windows)))]

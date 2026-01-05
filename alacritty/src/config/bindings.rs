@@ -238,6 +238,9 @@ pub enum Action {
     /// Toggle vi mode.
     ToggleViMode,
 
+    /// Toggle the command bar.
+    ToggleCommandBar,
+
     /// Allow receiving char input.
     ReceiveChar,
 
@@ -602,6 +605,7 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         "-",    ModifiersState::SUPER;                                         Action::DecreaseFontSize;
         "k",    ModifiersState::SUPER, ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x0c".into());
         "k",    ModifiersState::SUPER, ~BindingMode::VI, ~BindingMode::SEARCH; Action::ClearHistory;
+        "l",    ModifiersState::SUPER, ~BindingMode::SEARCH;                   Action::ToggleCommandBar;
         "v",    ModifiersState::SUPER, ~BindingMode::VI;                       Action::Paste;
         "v",    ModifiersState::SUPER, +BindingMode::VI, +BindingMode::SEARCH; Action::Paste;
         "n",    ModifiersState::SUPER;                                         Action::CreateNewWindow;

@@ -200,17 +200,20 @@ fn update_projection(u_projection: GLint, size: &SizeInfo) {
     let width = size.width();
     let height = size.height();
     let padding_x = size.padding_x();
+    let padding_right = size.padding_right();
     let padding_y = size.padding_y();
 
     // Bounds check.
-    if (width as u32) < (2 * padding_x as u32) || (height as u32) < (2 * padding_y as u32) {
+    if (width as u32) < ((padding_x + padding_right) as u32)
+        || (height as u32) < (2 * padding_y as u32)
+    {
         return;
     }
 
     // Compute scale and offset factors, from pixel to ndc space. Y is inverted.
-    //   [0, width - 2 * padding_x] to [-1, 1]
+    //   [0, width - padding_x - padding_right] to [-1, 1]
     //   [height - 2 * padding_y, 0] to [-1, 1]
-    let scale_x = 2. / (width - 2. * padding_x);
+    let scale_x = 2. / (width - padding_x - padding_right);
     let scale_y = -2. / (height - 2. * padding_y);
     let offset_x = -1.;
     let offset_y = 1.;

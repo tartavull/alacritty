@@ -3,7 +3,7 @@ use std::ffi::CStr;
 #[cfg(not(windows))]
 use std::ffi::CString;
 use std::ffi::OsStr;
-#[cfg(not(any(target_os = "macos", target_os = "openbsd", windows)))]
+#[cfg(not(any(target_os = "macos", windows)))]
 use std::fs;
 use std::io;
 #[cfg(not(windows))]
@@ -164,4 +164,59 @@ pub fn foreground_process_path(
         let foreground_path = unsafe { CStr::from_ptr(buf.as_ptr().cast()) }.to_str()?;
         Ok(PathBuf::from(foreground_path))
     }
+}
+
+#[cfg(not(windows))]
+pub fn foreground_process_name(
+    master_fd: RawFd,
+    shell_pid: u32,
+) -> Result<String, Box<dyn Error>> {
+    let mut pid = unsafe { libc::tcgetpgrp(master_fd) };
+    if pid < 0 {
+        pid = shell_pid as pid_t;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let path = macos::proc::executable_path(pid)?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "foreground process has no name"))?
+            .to_str()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "foreground process name is not utf-8")
+            })?;
+        return Ok(name.to_string());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        #[cfg(target_os = "freebsd")]
+        let comm_path = format!("/compat/linux/proc/{pid}/comm");
+        #[cfg(not(target_os = "freebsd"))]
+        let comm_path = format!("/proc/{pid}/comm");
+
+        if let Ok(comm) = fs::read_to_string(comm_path) {
+            let comm = comm.trim_end_matches('\n');
+            if !comm.is_empty() {
+                return Ok(comm.to_string());
+            }
+        }
+
+        #[cfg(target_os = "freebsd")]
+        let exe_path = format!("/compat/linux/proc/{pid}/exe");
+        #[cfg(not(target_os = "freebsd"))]
+        let exe_path = format!("/proc/{pid}/exe");
+
+        let exe = fs::read_link(exe_path)?;
+        let name = exe
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "foreground process has no name"))?
+            .to_str()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "foreground process name is not utf-8")
+            })?;
+        Ok(name.to_string())
+    }
+}
 }

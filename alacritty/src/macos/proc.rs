@@ -1,8 +1,9 @@
-use std::ffi::{CStr, CString, IntoStringError};
+use std::ffi::{CStr, CString, IntoStringError, OsString};
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::mem::{self, MaybeUninit};
 use std::os::raw::{c_int, c_void};
+use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
 /// Error during working directory retrieval.
@@ -66,6 +67,21 @@ pub fn cwd(pid: c_int) -> Result<PathBuf, Error> {
     };
 
     Ok(CString::from(c_str).into_string().map(PathBuf::from)?)
+}
+
+pub fn executable_path(pid: c_int) -> io::Result<PathBuf> {
+    const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
+
+    let mut buf = [0u8; PROC_PIDPATHINFO_MAXSIZE];
+    let size = buf.len() as u32;
+
+    let result = unsafe { sys::proc_pidpath(pid, buf.as_mut_ptr().cast(), size) };
+    if result <= 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let c_str = unsafe { CStr::from_ptr(buf.as_ptr().cast()) };
+    Ok(PathBuf::from(OsString::from_vec(c_str.to_bytes().to_vec())))
 }
 
 /// Bindings for libproc.
@@ -143,6 +159,8 @@ mod sys {
             buffer: *mut c_void,
             buffersize: c_int,
         ) -> c_int;
+
+        pub fn proc_pidpath(pid: c_int, buffer: *mut c_void, buffersize: u32) -> c_int;
     }
 }
 

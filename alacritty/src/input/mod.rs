@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use log::debug;
 use winit::dpi::PhysicalPosition;
 use winit::event::{
-    ElementState, Modifiers, MouseButton, MouseScrollDelta, Touch as TouchEvent, TouchPhase,
+    ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, Touch as TouchEvent,
+    TouchPhase,
 };
 #[cfg(target_os = "macos")]
 use winit::event_loop::ActiveEventLoop;
@@ -36,8 +37,6 @@ use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{ClearMode, Handler};
 
 use crate::clipboard::Clipboard;
-#[cfg(target_os = "macos")]
-use crate::config::window::Decorations;
 use crate::config::{
     Action, BindingMode, MouseAction, MouseEvent, SearchAction, UiConfig, ViAction,
 };
@@ -47,8 +46,11 @@ use crate::display::{Display, SizeInfo};
 use crate::event::{
     ClickState, Event, EventType, InlineSearchState, Mouse, TouchPurpose, TouchZoom,
 };
+#[cfg(target_os = "macos")]
+use crate::event::WebCommand;
 use crate::message_bar::{self, Message};
 use crate::scheduler::{Scheduler, TimerId, Topic};
+use crate::window_kind::WindowKind;
 
 pub mod keyboard;
 
@@ -98,11 +100,10 @@ pub trait ActionContext<T: EventListener> {
     fn display(&mut self) -> &mut Display;
     fn terminal(&self) -> &Term<T>;
     fn terminal_mut(&mut self) -> &mut Term<T>;
+    fn window_kind(&self) -> &WindowKind;
     fn spawn_new_instance(&mut self) {}
-    #[cfg(target_os = "macos")]
-    fn create_new_window(&mut self, _tabbing_id: Option<String>) {}
-    #[cfg(not(target_os = "macos"))]
     fn create_new_window(&mut self) {}
+    fn create_new_tab(&mut self) {}
     fn change_font_size(&mut self, _delta: f32) {}
     fn reset_font_size(&mut self) {}
     fn pop_message(&mut self) {}
@@ -113,6 +114,14 @@ pub trait ActionContext<T: EventListener> {
     fn mouse_mode(&self) -> bool;
     fn clipboard_mut(&mut self) -> &mut Clipboard;
     fn scheduler_mut(&mut self) -> &mut Scheduler;
+    #[cfg(target_os = "macos")]
+    fn select_next_tab(&mut self) {}
+    #[cfg(target_os = "macos")]
+    fn select_previous_tab(&mut self) {}
+    #[cfg(target_os = "macos")]
+    fn select_tab_at_index(&mut self, _index: usize) {}
+    #[cfg(target_os = "macos")]
+    fn select_last_tab(&mut self) {}
     fn start_search(&mut self, _direction: Direction) {}
     fn start_seeded_search(&mut self, _direction: Direction, _text: String) {}
     fn confirm_search(&mut self) {}
@@ -125,6 +134,15 @@ pub trait ActionContext<T: EventListener> {
     fn advance_search_origin(&mut self, _direction: Direction) {}
     fn search_direction(&self) -> Direction;
     fn search_active(&self) -> bool;
+    fn command_active(&self) -> bool {
+        false
+    }
+    fn toggle_command_bar(&mut self) {}
+    fn confirm_command(&mut self) {}
+    fn cancel_command(&mut self) {}
+    fn command_autocomplete(&mut self) {}
+    fn command_input(&mut self, _c: char) {}
+    fn command_pop_word(&mut self) {}
     fn on_typing_start(&mut self) {}
     fn toggle_vi_mode(&mut self) {}
     fn inline_search_state(&mut self) -> &mut InlineSearchState;
@@ -144,6 +162,12 @@ pub trait ActionContext<T: EventListener> {
         S: AsRef<OsStr>,
     {
     }
+    #[cfg(target_os = "macos")]
+    fn web_handle_key(&mut self, _key: &KeyEvent, _text: &str) -> bool {
+        false
+    }
+    #[cfg(target_os = "macos")]
+    fn handle_web_command(&mut self, _command: WebCommand) {}
 }
 
 impl Action {
@@ -178,6 +202,10 @@ impl<T: EventListener> Execute<T> for Action {
             Action::ToggleViMode => {
                 ctx.on_typing_start();
                 ctx.toggle_vi_mode()
+            },
+            Action::ToggleCommandBar => {
+                ctx.on_typing_start();
+                ctx.toggle_command_bar();
             },
             action @ (Action::ViMotion(_) | Action::Vi(_))
                 if !ctx.terminal().mode().contains(TermMode::VI) =>
@@ -403,43 +431,33 @@ impl<T: EventListener> Execute<T> for Action {
             },
             Action::ClearHistory => ctx.terminal_mut().clear_screen(ClearMode::Saved),
             Action::ClearLogNotice => ctx.pop_message(),
-            #[cfg(not(target_os = "macos"))]
             Action::CreateNewWindow => ctx.create_new_window(),
             Action::SpawnNewInstance => ctx.spawn_new_instance(),
+            Action::CreateNewTab => ctx.create_new_tab(),
             #[cfg(target_os = "macos")]
-            Action::CreateNewWindow => ctx.create_new_window(None),
+            Action::SelectNextTab => ctx.select_next_tab(),
             #[cfg(target_os = "macos")]
-            Action::CreateNewTab => {
-                // Tabs on macOS are not possible without decorations.
-                if ctx.config().window.decorations != Decorations::None {
-                    let tabbing_id = Some(ctx.window().tabbing_id());
-                    ctx.create_new_window(tabbing_id);
-                }
-            },
+            Action::SelectPreviousTab => ctx.select_previous_tab(),
             #[cfg(target_os = "macos")]
-            Action::SelectNextTab => ctx.window().select_next_tab(),
+            Action::SelectTab1 => ctx.select_tab_at_index(0),
             #[cfg(target_os = "macos")]
-            Action::SelectPreviousTab => ctx.window().select_previous_tab(),
+            Action::SelectTab2 => ctx.select_tab_at_index(1),
             #[cfg(target_os = "macos")]
-            Action::SelectTab1 => ctx.window().select_tab_at_index(0),
+            Action::SelectTab3 => ctx.select_tab_at_index(2),
             #[cfg(target_os = "macos")]
-            Action::SelectTab2 => ctx.window().select_tab_at_index(1),
+            Action::SelectTab4 => ctx.select_tab_at_index(3),
             #[cfg(target_os = "macos")]
-            Action::SelectTab3 => ctx.window().select_tab_at_index(2),
+            Action::SelectTab5 => ctx.select_tab_at_index(4),
             #[cfg(target_os = "macos")]
-            Action::SelectTab4 => ctx.window().select_tab_at_index(3),
+            Action::SelectTab6 => ctx.select_tab_at_index(5),
             #[cfg(target_os = "macos")]
-            Action::SelectTab5 => ctx.window().select_tab_at_index(4),
+            Action::SelectTab7 => ctx.select_tab_at_index(6),
             #[cfg(target_os = "macos")]
-            Action::SelectTab6 => ctx.window().select_tab_at_index(5),
+            Action::SelectTab8 => ctx.select_tab_at_index(7),
             #[cfg(target_os = "macos")]
-            Action::SelectTab7 => ctx.window().select_tab_at_index(6),
+            Action::SelectTab9 => ctx.select_tab_at_index(8),
             #[cfg(target_os = "macos")]
-            Action::SelectTab8 => ctx.window().select_tab_at_index(7),
-            #[cfg(target_os = "macos")]
-            Action::SelectTab9 => ctx.window().select_tab_at_index(8),
-            #[cfg(target_os = "macos")]
-            Action::SelectLastTab => ctx.window().select_last_tab(),
+            Action::SelectLastTab => ctx.select_last_tab(),
             _ => (),
         }
     }
@@ -452,6 +470,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     #[inline]
     pub fn mouse_moved(&mut self, position: PhysicalPosition<f64>) {
+        if self.ctx.window_kind().is_web() {
+            return;
+        }
+
         let size_info = self.ctx.size_info();
 
         let (x, y) = position.into();
@@ -524,9 +546,11 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             x.saturating_sub(size_info.padding_x() as usize) % size_info.cell_width() as usize;
         let half_cell_width = (size_info.cell_width() / 2.0) as usize;
 
-        let additional_padding =
-            (size_info.width() - size_info.padding_x() * 2.) % size_info.cell_width();
-        let end_of_grid = size_info.width() - size_info.padding_x() - additional_padding;
+        let additional_padding = (size_info.width()
+            - size_info.padding_x()
+            - size_info.padding_right())
+            % size_info.cell_width();
+        let end_of_grid = size_info.width() - size_info.padding_right() - additional_padding;
 
         if cell_x > half_cell_width
             // Edge case when mouse leaves the window.
@@ -723,6 +747,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     }
 
     pub fn mouse_wheel_input(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
+        if self.ctx.window_kind().is_web() {
+            return;
+        }
+
         let multiplier = self.ctx.config().scrolling.multiplier;
         match delta {
             MouseScrollDelta::LineDelta(columns, lines) => {
@@ -838,6 +866,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     /// Handle touch input.
     pub fn touch(&mut self, touch: TouchEvent) {
+        if self.ctx.window_kind().is_web() {
+            return;
+        }
+
         match touch.phase {
             TouchPhase::Started => self.on_touch_start(touch),
             TouchPhase::Moved => self.on_touch_motion(touch),
@@ -986,6 +1018,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     }
 
     pub fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if self.ctx.window_kind().is_web() {
+            return;
+        }
+
         match button {
             MouseButton::Left => self.ctx.mouse_mut().left_button_state = state,
             MouseButton::Middle => self.ctx.mouse_mut().middle_button_state = state,
@@ -1175,6 +1211,7 @@ mod tests {
         pub modifiers: Modifiers,
         config: &'a UiConfig,
         inline_search_state: &'a mut InlineSearchState,
+        window_kind: WindowKind,
     }
 
     impl<T: EventListener> super::ActionContext<T> for ActionContext<'_, T> {
@@ -1199,12 +1236,20 @@ mod tests {
             false
         }
 
+        fn command_active(&self) -> bool {
+            false
+        }
+
         fn terminal(&self) -> &Term<T> {
             self.terminal
         }
 
         fn terminal_mut(&mut self) -> &mut Term<T> {
             self.terminal
+        }
+
+        fn window_kind(&self) -> &WindowKind {
+            &self.window_kind
         }
 
         fn size_info(&self) -> SizeInfo {
@@ -1300,6 +1345,7 @@ mod tests {
                     3.0,
                     0.,
                     0.,
+                    0.,
                     false,
                 );
 
@@ -1324,6 +1370,7 @@ mod tests {
                     message_buffer: &mut message_buffer,
                     inline_search_state: &mut inline_search_state,
                     config: &cfg,
+                    window_kind: WindowKind::Terminal,
                 };
 
                 let mut processor = Processor::new(context);
@@ -1363,6 +1410,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn web_tab_ignores_mouse_input() {
+        let mut clipboard = Clipboard::new_nop();
+        let cfg = UiConfig::default();
+        let size = SizeInfo::new(21.0, 51.0, 3.0, 3.0, 0., 0., 0., false);
+        let mut terminal = Term::new(cfg.term_options(), &size, MockEventProxy);
+        let mut mouse = Mouse::default();
+        let mut inline_search_state = InlineSearchState::default();
+        let mut message_buffer = MessageBuffer::default();
+
+        let context = ActionContext {
+            terminal: &mut terminal,
+            mouse: &mut mouse,
+            size_info: &size,
+            clipboard: &mut clipboard,
+            modifiers: Default::default(),
+            message_buffer: &mut message_buffer,
+            inline_search_state: &mut inline_search_state,
+            config: &cfg,
+            window_kind: WindowKind::Web { url: String::from("about:blank") },
+        };
+
+        let mut processor = Processor::new(context);
+        processor.mouse_input(ElementState::Pressed, MouseButton::Left);
+
+        assert_eq!(processor.ctx.mouse.left_button_state, ElementState::Released);
+    }
+
+    #[test]
+    fn web_tab_ignores_mouse_wheel() {
+        let mut clipboard = Clipboard::new_nop();
+        let cfg = UiConfig::default();
+        let size = SizeInfo::new(21.0, 51.0, 3.0, 3.0, 0., 0., 0., false);
+        let mut terminal = Term::new(cfg.term_options(), &size, MockEventProxy);
+        let mut mouse = Mouse::default();
+        let mut inline_search_state = InlineSearchState::default();
+        let mut message_buffer = MessageBuffer::default();
+
+        let context = ActionContext {
+            terminal: &mut terminal,
+            mouse: &mut mouse,
+            size_info: &size,
+            clipboard: &mut clipboard,
+            modifiers: Default::default(),
+            message_buffer: &mut message_buffer,
+            inline_search_state: &mut inline_search_state,
+            config: &cfg,
+            window_kind: WindowKind::Web { url: String::from("about:blank") },
+        };
+
+        let mut processor = Processor::new(context);
+        processor.mouse_wheel_input(MouseScrollDelta::LineDelta(0.0, 1.0), TouchPhase::Moved);
+
+        assert_eq!(processor.ctx.terminal.grid().display_offset(), 0);
     }
 
     test_clickstate! {

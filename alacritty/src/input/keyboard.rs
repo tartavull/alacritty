@@ -53,11 +53,24 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             return;
         }
 
+        if self.ctx.command_active() {
+            self.handle_command_key(&key, &text);
+            return;
+        }
+
         // Reset search delay when the user is still typing.
         self.reset_search_delay();
 
         // Key bindings suppress the character input.
         if self.process_key_bindings(&key) {
+            return;
+        }
+
+        if self.ctx.window_kind().is_web() {
+            #[cfg(target_os = "macos")]
+            if self.ctx.web_handle_key(&key, &text) {
+                return;
+            }
             return;
         }
 
@@ -99,6 +112,36 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
                 self.ctx.on_terminal_input_start();
             }
             self.ctx.write_to_pty(bytes);
+        }
+    }
+
+    fn handle_command_key(&mut self, key: &KeyEvent, text: &str) {
+        match key.logical_key.as_ref() {
+            Key::Named(NamedKey::Escape) => {
+                self.ctx.cancel_command();
+                return;
+            },
+            Key::Named(NamedKey::Enter) => {
+                self.ctx.confirm_command();
+                return;
+            },
+            Key::Named(NamedKey::Tab) => {
+                self.ctx.command_autocomplete();
+                return;
+            },
+            Key::Named(NamedKey::Backspace) => {
+                self.ctx.command_input('\x7f');
+                return;
+            },
+            _ => (),
+        }
+
+        for character in text.chars() {
+            if character == '\u{3}' {
+                self.ctx.cancel_command();
+                return;
+            }
+            self.ctx.command_input(character);
         }
     }
 
@@ -250,6 +293,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     /// Handle key release.
     fn key_release(&mut self, key: KeyEvent, mode: TermMode, mods: ModifiersState) {
+        if self.ctx.window_kind().is_web() {
+            return;
+        }
+
         if !mode.contains(TermMode::REPORT_EVENT_TYPES)
             || mode.contains(TermMode::VI)
             || self.ctx.search_active()

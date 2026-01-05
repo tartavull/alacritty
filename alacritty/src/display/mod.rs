@@ -50,18 +50,30 @@ use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
 use crate::display::hint::{HintMatch, HintState};
 use crate::display::meter::Meter;
 use crate::display::window::Window;
-use crate::event::{Event, EventType, Mouse, SearchState};
+#[cfg(target_os = "macos")]
+use crate::display::tab_panel::{compute_panel_dimensions, TabPanel};
+use crate::event::{CommandState, Event, EventType, Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
 use crate::renderer::{self, GlyphCache, Renderer, platform};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::string::{ShortenDirection, StrShortener};
 
+#[cfg(not(target_os = "macos"))]
+#[derive(Default, Clone, Copy)]
+struct PanelDimensions {
+    columns: usize,
+    width: f32,
+}
+
 pub mod color;
 pub mod content;
 pub mod cursor;
 pub mod hint;
 pub mod window;
+
+#[cfg(target_os = "macos")]
+mod tab_panel;
 
 mod bell;
 mod damage;
@@ -158,6 +170,9 @@ pub struct SizeInfo<T = f32> {
     /// Horizontal window padding.
     padding_x: T,
 
+    /// Right window padding.
+    padding_right: T,
+
     /// Vertical window padding.
     padding_y: T,
 
@@ -176,6 +191,7 @@ impl From<SizeInfo<f32>> for SizeInfo<u32> {
             cell_width: size_info.cell_width as u32,
             cell_height: size_info.cell_height as u32,
             padding_x: size_info.padding_x as u32,
+            padding_right: size_info.padding_right as u32,
             padding_y: size_info.padding_y as u32,
             screen_lines: size_info.screen_lines,
             columns: size_info.screen_lines,
@@ -221,6 +237,11 @@ impl<T: Clone + Copy> SizeInfo<T> {
     }
 
     #[inline]
+    pub fn padding_right(&self) -> T {
+        self.padding_right
+    }
+
+    #[inline]
     pub fn padding_y(&self) -> T {
         self.padding_y
     }
@@ -234,18 +255,20 @@ impl SizeInfo<f32> {
         cell_width: f32,
         cell_height: f32,
         mut padding_x: f32,
+        mut padding_right: f32,
         mut padding_y: f32,
         dynamic_padding: bool,
     ) -> SizeInfo {
         if dynamic_padding {
             padding_x = Self::dynamic_padding(padding_x.floor(), width, cell_width);
+            padding_right = padding_x;
             padding_y = Self::dynamic_padding(padding_y.floor(), height, cell_height);
         }
 
         let lines = (height - 2. * padding_y) / cell_height;
         let screen_lines = cmp::max(lines as usize, MIN_SCREEN_LINES);
 
-        let columns = (width - 2. * padding_x) / cell_width;
+        let columns = (width - padding_x - padding_right) / cell_width;
         let columns = cmp::max(columns as usize, MIN_COLUMNS);
 
         SizeInfo {
@@ -254,6 +277,7 @@ impl SizeInfo<f32> {
             cell_width,
             cell_height,
             padding_x: padding_x.floor(),
+            padding_right: padding_right.floor(),
             padding_y: padding_y.floor(),
             screen_lines,
             columns,
@@ -343,6 +367,9 @@ pub struct Display {
     pub window: Window,
 
     pub size_info: SizeInfo,
+
+    #[cfg(target_os = "macos")]
+    pub tab_panel: TabPanel,
 
     /// Hint highlighted by the mouse.
     pub highlighted_hint: Option<HintMatch>,
@@ -447,15 +474,31 @@ impl Display {
         let padding = config.window.padding(window.scale_factor as f32);
         let viewport_size = window.inner_size();
 
+        #[cfg(target_os = "macos")]
+        let panel_dimensions = compute_panel_dimensions(
+            config,
+            cell_width,
+            viewport_size.width as f32,
+            padding.0,
+            window.scale_factor as f32,
+        );
+        #[cfg(not(target_os = "macos"))]
+        let panel_dimensions = PanelDimensions::default();
+        let panel_padding = panel_dimensions.width;
+        let dynamic_padding = config.window.dynamic_padding
+            && config.window.dimensions().is_none()
+            && panel_dimensions.columns == 0;
+
         // Create new size with at least one column and row.
         let size_info = SizeInfo::new(
             viewport_size.width as f32,
             viewport_size.height as f32,
             cell_width,
             cell_height,
+            padding.0 + panel_padding,
             padding.0,
             padding.1,
-            config.window.dynamic_padding && config.window.dimensions().is_none(),
+            dynamic_padding,
         );
 
         info!("Cell size: {cell_width} x {cell_height}");
@@ -509,6 +552,14 @@ impl Display {
         let mut damage_tracker = DamageTracker::new(size_info.screen_lines(), size_info.columns());
         damage_tracker.debug = config.debug.highlight_damage;
 
+        #[cfg(target_os = "macos")]
+        let mut tab_panel = TabPanel::new();
+        #[cfg(target_os = "macos")]
+        {
+            tab_panel.set_enabled(config.window.tab_panel.enabled);
+            tab_panel.set_dimensions(panel_dimensions);
+        }
+
         // Disable vsync.
         if let Err(err) = surface.set_swap_interval(&context, SwapInterval::DontWait) {
             info!("Failed to disable vsync: {err}");
@@ -524,6 +575,8 @@ impl Display {
             frame_timer: FrameTimer::new(),
             raw_window_handle,
             damage_tracker,
+            #[cfg(target_os = "macos")]
+            tab_panel,
             glyph_cache,
             hint_state,
             size_info,
@@ -654,6 +707,7 @@ impl Display {
         pty_resize_handle: &mut dyn OnResize,
         message_buffer: &MessageBuffer,
         search_state: &mut SearchState,
+        command_state: &CommandState,
         config: &UiConfig,
     ) where
         T: EventListener,
@@ -689,21 +743,42 @@ impl Display {
 
         let padding = config.window.padding(self.window.scale_factor as f32);
 
+        #[cfg(target_os = "macos")]
+        let panel_dimensions = compute_panel_dimensions(
+            config,
+            cell_width,
+            width,
+            padding.0,
+            self.window.scale_factor as f32,
+        );
+        #[cfg(not(target_os = "macos"))]
+        let panel_dimensions = PanelDimensions::default();
+        let panel_padding = panel_dimensions.width;
+        let dynamic_padding = config.window.dynamic_padding && panel_dimensions.columns == 0;
+
         let mut new_size = SizeInfo::new(
             width,
             height,
             cell_width,
             cell_height,
+            padding.0 + panel_padding,
             padding.0,
             padding.1,
-            config.window.dynamic_padding,
+            dynamic_padding,
         );
+
+        #[cfg(target_os = "macos")]
+        {
+            self.tab_panel.set_enabled(config.window.tab_panel.enabled);
+            self.tab_panel.set_dimensions(panel_dimensions);
+        }
 
         // Update number of column/lines in the viewport.
         let search_active = search_state.history_index.is_some();
         let message_bar_lines = message_buffer.message().map_or(0, |m| m.text(&new_size).len());
         let search_lines = usize::from(search_active);
-        new_size.reserve_lines(message_bar_lines + search_lines);
+        let command_lines = usize::from(command_state.is_active());
+        new_size.reserve_lines(message_bar_lines + search_lines + command_lines);
 
         // Update resize increments.
         if config.window.resize_increments {
@@ -779,6 +854,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         search_state: &mut SearchState,
+        command_state: &CommandState,
     ) {
         // Collect renderable content before the terminal is dropped.
         let mut content = RenderableContent::new(config, self, &terminal, search_state);
@@ -796,6 +872,7 @@ impl Display {
         let total_lines = terminal.grid().total_lines();
         let metrics = self.glyph_cache.font_metrics();
         let size_info = self.size_info;
+        let command_active = command_state.is_active();
 
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
@@ -821,7 +898,8 @@ impl Display {
 
         let requires_full_damage = self.visual_bell.intensity() != 0.
             || self.hint_state.active()
-            || search_state.regex().is_some();
+            || search_state.regex().is_some()
+            || command_active;
         if requires_full_damage {
             self.damage_tracker.frame().mark_fully_damaged();
             self.damage_tracker.next_frame().mark_fully_damaged();
@@ -895,6 +973,18 @@ impl Display {
         // Draw cursor.
         rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
 
+        #[cfg(target_os = "macos")]
+        if self.tab_panel.is_enabled() {
+            self.tab_panel.push_rects(&size_info, config, &mut rects);
+            self.damage_tracker.frame().add_viewport_rect(
+                &size_info,
+                0,
+                0,
+                self.tab_panel.width().round() as i32,
+                size_info.height() as i32,
+            );
+        }
+
         // Push visual bell after url/underline/strikeout rects.
         let visual_bell_intensity = self.visual_bell.intensity();
         if visual_bell_intensity != 0. {
@@ -909,49 +999,73 @@ impl Display {
             rects.push(visual_bell_rect);
         }
 
-        // Handle IME positioning and search bar rendering.
-        let ime_position = match search_state.regex() {
-            Some(regex) => {
-                let search_label = match search_state.direction() {
-                    Direction::Right => FORWARD_SEARCH_LABEL,
-                    Direction::Left => BACKWARD_SEARCH_LABEL,
-                };
+        // Handle IME positioning and command/search bar rendering.
+        let ime_position = if command_active {
+            let command_text = Self::format_command(command_state.text(), size_info.columns());
 
-                let search_text = Self::format_search(regex, search_label, size_info.columns());
+            self.draw_command_bar(config, &command_text);
 
-                // Render the search bar.
-                self.draw_search(config, &search_text);
+            let line = size_info.screen_lines();
+            let column = Column(command_text.chars().count() - 1);
 
-                // Draw search bar cursor.
-                let line = size_info.screen_lines();
-                let column = Column(search_text.chars().count() - 1);
+            if self.ime.preedit().is_none() {
+                let fg = config.colors.footer_bar_foreground();
+                let shape = CursorShape::Underline;
+                let cursor_width = NonZeroU32::new(1).unwrap();
+                let cursor =
+                    RenderableCursor::new(Point::new(line, column), shape, fg, cursor_width);
+                rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
+            }
 
-                // Add cursor to search bar if IME is not active.
-                if self.ime.preedit().is_none() {
-                    let fg = config.colors.footer_bar_foreground();
-                    let shape = CursorShape::Underline;
-                    let cursor_width = NonZeroU32::new(1).unwrap();
-                    let cursor =
-                        RenderableCursor::new(Point::new(line, column), shape, fg, cursor_width);
-                    rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
-                }
+            Some(Point::new(line, column))
+        } else {
+            match search_state.regex() {
+                Some(regex) => {
+                    let search_label = match search_state.direction() {
+                        Direction::Right => FORWARD_SEARCH_LABEL,
+                        Direction::Left => BACKWARD_SEARCH_LABEL,
+                    };
 
-                Some(Point::new(line, column))
-            },
-            None => {
-                let num_lines = self.size_info.screen_lines();
-                match vi_cursor_viewport_point {
-                    None => term::point_to_viewport(display_offset, cursor_point)
-                        .filter(|point| point.line < num_lines),
-                    point => point,
-                }
-            },
+                    let search_text = Self::format_search(regex, search_label, size_info.columns());
+
+                    // Render the search bar.
+                    self.draw_search(config, &search_text);
+
+                    // Draw search bar cursor.
+                    let line = size_info.screen_lines();
+                    let column = Column(search_text.chars().count() - 1);
+
+                    // Add cursor to search bar if IME is not active.
+                    if self.ime.preedit().is_none() {
+                        let fg = config.colors.footer_bar_foreground();
+                        let shape = CursorShape::Underline;
+                        let cursor_width = NonZeroU32::new(1).unwrap();
+                        let cursor = RenderableCursor::new(
+                            Point::new(line, column),
+                            shape,
+                            fg,
+                            cursor_width,
+                        );
+                        rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
+                    }
+
+                    Some(Point::new(line, column))
+                },
+                None => {
+                    let num_lines = self.size_info.screen_lines();
+                    match vi_cursor_viewport_point {
+                        None => term::point_to_viewport(display_offset, cursor_point)
+                            .filter(|point| point.line < num_lines),
+                        point => point,
+                    }
+                },
+            }
         };
 
         // Handle IME.
         if self.ime.is_enabled() {
             if let Some(point) = ime_position {
-                let (fg, bg) = if search_state.regex().is_some() {
+                let (fg, bg) = if command_active || search_state.regex().is_some() {
                     (config.colors.footer_bar_foreground(), config.colors.footer_bar_background())
                 } else {
                     (foreground_color, background_color)
@@ -962,11 +1076,12 @@ impl Display {
         }
 
         if let Some(message) = message_buffer.message() {
-            let search_offset = usize::from(search_state.regex().is_some());
+            let bar_offset =
+                usize::from(search_state.regex().is_some()) + usize::from(command_active);
             let text = message.text(&size_info);
 
             // Create a new rectangle for the background.
-            let start_line = size_info.screen_lines() + search_offset;
+            let start_line = size_info.screen_lines() + bar_offset;
             let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
 
             let bg = match message.ty() {
@@ -989,6 +1104,14 @@ impl Display {
             // Draw rectangles.
             self.renderer.draw_rects(&size_info, &metrics, rects);
 
+            #[cfg(target_os = "macos")]
+            self.tab_panel.draw_text(
+                &size_info,
+                config,
+                &mut self.renderer,
+                &mut self.glyph_cache,
+            );
+
             // Relay messages to the user.
             let glyph_cache = &mut self.glyph_cache;
             let fg = config.colors.primary.background;
@@ -1006,6 +1129,14 @@ impl Display {
         } else {
             // Draw rectangles.
             self.renderer.draw_rects(&size_info, &metrics, rects);
+
+            #[cfg(target_os = "macos")]
+            self.tab_panel.draw_text(
+                &size_info,
+                config,
+                &mut self.renderer,
+                &mut self.glyph_cache,
+            );
         }
 
         self.draw_render_timer(config);
@@ -1046,11 +1177,150 @@ impl Display {
         self.damage_tracker.swap_damage();
     }
 
+    pub fn draw_web(
+        &mut self,
+        scheduler: &mut Scheduler,
+        message_buffer: &MessageBuffer,
+        config: &UiConfig,
+        command_state: &CommandState,
+    ) {
+        let size_info = self.size_info;
+        let metrics = self.glyph_cache.font_metrics();
+        let background_color = config.colors.primary.background;
+        let command_active = command_state.is_active();
+
+        self.damage_tracker.frame().mark_fully_damaged();
+
+        self.make_current();
+        self.renderer.clear(background_color, config.window_opacity());
+
+        #[cfg(target_os = "macos")]
+        self.renderer.set_viewport(&size_info);
+
+        let mut rects = Vec::new();
+
+        #[cfg(target_os = "macos")]
+        if self.tab_panel.is_enabled() {
+            self.tab_panel.push_rects(&size_info, config, &mut rects);
+            self.damage_tracker.frame().add_viewport_rect(
+                &size_info,
+                0,
+                0,
+                self.tab_panel.width().round() as i32,
+                size_info.height() as i32,
+            );
+        }
+
+        let ime_position = if command_active {
+            let command_text = Self::format_command(command_state.text(), size_info.columns());
+            self.draw_command_bar(config, &command_text);
+
+            let line = size_info.screen_lines();
+            let column = Column(command_text.chars().count().saturating_sub(1));
+
+            if self.ime.preedit().is_none() {
+                let fg = config.colors.footer_bar_foreground();
+                let shape = CursorShape::Underline;
+                let cursor_width = NonZeroU32::new(1).unwrap();
+                let cursor = RenderableCursor::new(Point::new(line, column), shape, fg, cursor_width);
+                rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
+            }
+
+            Some(Point::new(line, column))
+        } else {
+            None
+        };
+
+        if self.ime.is_enabled() {
+            if let Some(point) = ime_position {
+                let fg = config.colors.footer_bar_foreground();
+                let bg = config.colors.footer_bar_background();
+                self.draw_ime_preview(point, fg, bg, &mut rects, config);
+            }
+        }
+
+        if let Some(message) = message_buffer.message() {
+            let bar_offset = usize::from(command_active);
+            let text = message.text(&size_info);
+
+            let start_line = size_info.screen_lines() + bar_offset;
+            let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
+
+            let bg = match message.ty() {
+                MessageType::Error => config.colors.normal.red,
+                MessageType::Warning => config.colors.normal.yellow,
+            };
+
+            let x = 0;
+            let width = size_info.width() as i32;
+            let height = (size_info.height() - y) as i32;
+            let message_bar_rect =
+                RenderRect::new(x as f32, y, width as f32, height as f32, bg, 1.);
+
+            rects.push(message_bar_rect);
+            self.damage_tracker.frame().add_viewport_rect(&size_info, x, y as i32, width, height);
+
+            self.renderer.draw_rects(&size_info, &metrics, rects);
+
+            #[cfg(target_os = "macos")]
+            self.tab_panel.draw_text(&size_info, config, &mut self.renderer, &mut self.glyph_cache);
+
+            let glyph_cache = &mut self.glyph_cache;
+            let fg = config.colors.primary.background;
+            for (i, message_text) in text.iter().enumerate() {
+                let point = Point::new(start_line + i, Column(0));
+                self.renderer.draw_string(
+                    point,
+                    fg,
+                    bg,
+                    message_text.chars(),
+                    &size_info,
+                    glyph_cache,
+                );
+            }
+        } else {
+            self.renderer.draw_rects(&size_info, &metrics, rects);
+
+            #[cfg(target_os = "macos")]
+            self.tab_panel.draw_text(&size_info, config, &mut self.renderer, &mut self.glyph_cache);
+        }
+
+        self.draw_render_timer(config);
+
+        self.window.pre_present_notify();
+
+        if self.damage_tracker.debug {
+            let damage = self.damage_tracker.shape_frame_damage(self.size_info.into());
+            let mut rects = Vec::with_capacity(damage.len());
+            self.highlight_damage(&mut rects);
+            self.renderer.draw_rects(&self.size_info, &metrics, rects);
+        }
+
+        self.swap_buffers();
+
+        if matches!(self.raw_window_handle, RawWindowHandle::Xcb(_) | RawWindowHandle::Xlib(_)) {
+            self.renderer.finish();
+        }
+
+        if !matches!(self.raw_window_handle, RawWindowHandle::Wayland(_)) {
+            self.request_frame(scheduler);
+        }
+
+        self.damage_tracker.swap_damage();
+    }
+
     /// Update to a new configuration.
     pub fn update_config(&mut self, config: &UiConfig) {
         self.damage_tracker.debug = config.debug.highlight_damage;
         self.visual_bell.update_config(&config.bell);
         self.colors = List::from(&config.colors);
+        #[cfg(target_os = "macos")]
+        self.tab_panel.set_enabled(config.window.tab_panel.enabled);
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn set_tab_panel_groups(&mut self, groups: Vec<crate::tab_panel::TabPanelGroup>) -> bool {
+        self.tab_panel.set_groups(groups)
     }
 
     /// Update the mouse/vi mode cursor hint highlighting.
@@ -1239,6 +1509,25 @@ impl Display {
         bar_text
     }
 
+    /// Format command input to account for the cursor and fullwidth characters.
+    fn format_command(command: &str, max_width: usize) -> String {
+        if max_width == 0 {
+            return String::new();
+        }
+
+        let mut bar_text: String = StrShortener::new(
+            command,
+            max_width.saturating_sub(1),
+            ShortenDirection::Left,
+            Some(SHORTENER),
+        )
+        .collect();
+
+        // Add place for cursor.
+        bar_text.push(' ');
+        bar_text
+    }
+
     /// Draw preview for the currently highlighted `Hyperlink`.
     #[inline(never)]
     fn draw_hyperlink_preview(
@@ -1312,6 +1601,26 @@ impl Display {
 
         let point = Point::new(self.size_info.screen_lines(), Column(0));
 
+        let fg = config.colors.footer_bar_foreground();
+        let bg = config.colors.footer_bar_background();
+
+        self.renderer.draw_string(
+            point,
+            fg,
+            bg,
+            text.chars(),
+            &self.size_info,
+            &mut self.glyph_cache,
+        );
+    }
+
+    /// Draw current command input.
+    #[inline(never)]
+    fn draw_command_bar(&mut self, config: &UiConfig, text: &str) {
+        let num_cols = self.size_info.columns();
+        let text = format!("{text:<num_cols$}");
+
+        let point = Point::new(self.size_info.screen_lines(), Column(0));
         let fg = config.colors.footer_bar_foreground();
         let bg = config.colors.footer_bar_background();
 
@@ -1627,7 +1936,16 @@ fn window_size(
     let grid_width = cell_width * dimensions.columns.max(MIN_COLUMNS) as f32;
     let grid_height = cell_height * dimensions.lines.max(MIN_SCREEN_LINES) as f32;
 
-    let width = (padding.0).mul_add(2., grid_width).floor();
+    #[cfg(target_os = "macos")]
+    let panel_width = if config.window.tab_panel.enabled {
+        config.window.tab_panel.width as f32 * scale_factor
+    } else {
+        0.
+    };
+    #[cfg(not(target_os = "macos"))]
+    let panel_width = 0.;
+
+    let width = (padding.0 * 2. + grid_width + panel_width).floor();
     let height = (padding.1).mul_add(2., grid_height).floor();
 
     PhysicalSize::new(width as u32, height as u32)
