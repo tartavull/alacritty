@@ -1,8 +1,15 @@
+use std::time::Instant;
+
 use winit::dpi::PhysicalPosition;
-use winit::event::{ElementState, MouseButton};
+use winit::event::{ElementState, KeyEvent, MouseButton};
+use winit::keyboard::{Key, NamedKey};
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::CursorIcon;
 
 use unicode_width::UnicodeWidthChar;
+
+#[cfg(target_os = "macos")]
+use crossfont::GlyphKey;
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point};
@@ -16,10 +23,37 @@ use crate::renderer::{GlyphCache, Renderer};
 use crate::tab_panel::{TabPanelCommand, TabPanelGroup, TabPanelTab};
 use crate::tabs::TabId;
 
+const RESIZE_HANDLE_WIDTH_PX: f64 = 6.0;
+const PANEL_ICON_SCALE: f32 = 2.0;
+const PANEL_ROW_PADDING_PX: f32 = 4.0;
+const ACTIVITY_INDICATOR_COLS: usize = 2;
+const ACTIVITY_INDICATOR_FILLED: char = '\u{25CF}';
+const ACTIVITY_INDICATOR_OUTLINE: char = '\u{25CB}';
+
 #[derive(Default, Clone, Copy)]
 pub struct PanelDimensions {
     pub columns: usize,
     pub width: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabPanelEditTarget {
+    Tab(TabId),
+    Group(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabPanelEditCommit {
+    pub target: TabPanelEditTarget,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TabPanelEditOutcome {
+    None,
+    Changed,
+    Commit(TabPanelEditCommit),
+    Cancelled,
 }
 
 pub fn compute_panel_dimensions(
@@ -57,10 +91,19 @@ pub struct TabPanel {
     width_cols: usize,
     width_px: f32,
     groups: Vec<TabPanelGroup>,
+    edit: Option<EditState>,
     hover: HoverState,
     drag: Option<DragState>,
-    drop_target: Option<usize>,
+    resize: Option<ResizeState>,
+    drop_target: Option<DropTarget>,
     last_mouse_pos: Option<PhysicalPosition<f64>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditState {
+    target: TabPanelEditTarget,
+    text: String,
+    cursor: usize,
 }
 
 impl TabPanel {
@@ -91,7 +134,134 @@ impl TabPanel {
         }
 
         self.groups = groups;
+        self.validate_edit_target();
         true
+    }
+
+    pub fn is_editing(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    pub fn begin_edit_tab(&mut self, tab_id: TabId, title: String) -> bool {
+        self.begin_edit(TabPanelEditTarget::Tab(tab_id), title)
+    }
+
+    pub fn begin_edit_group(&mut self, group_id: usize, name: String) -> bool {
+        self.begin_edit(TabPanelEditTarget::Group(group_id), name)
+    }
+
+    pub fn cancel_edit(&mut self) -> bool {
+        self.edit.take().is_some()
+    }
+
+    pub fn handle_key_event(&mut self, key: &KeyEvent) -> TabPanelEditOutcome {
+        let Some(edit) = self.edit.as_mut() else {
+            return TabPanelEditOutcome::None;
+        };
+
+        if key.state == ElementState::Released {
+            return TabPanelEditOutcome::None;
+        }
+
+        match key.logical_key.as_ref() {
+            Key::Named(NamedKey::Escape) => {
+                self.edit = None;
+                return TabPanelEditOutcome::Cancelled;
+            },
+            Key::Named(NamedKey::Enter) => {
+                let commit = self.take_edit_commit();
+                return TabPanelEditOutcome::Commit(commit);
+            },
+            Key::Named(NamedKey::Backspace) => {
+                if edit.backspace() {
+                    return TabPanelEditOutcome::Changed;
+                }
+            },
+            Key::Named(NamedKey::Delete) => {
+                if edit.delete() {
+                    return TabPanelEditOutcome::Changed;
+                }
+            },
+            Key::Named(NamedKey::ArrowLeft) => {
+                if edit.move_left() {
+                    return TabPanelEditOutcome::Changed;
+                }
+            },
+            Key::Named(NamedKey::ArrowRight) => {
+                if edit.move_right() {
+                    return TabPanelEditOutcome::Changed;
+                }
+            },
+            Key::Named(NamedKey::Home) => {
+                if edit.move_home() {
+                    return TabPanelEditOutcome::Changed;
+                }
+            },
+            Key::Named(NamedKey::End) => {
+                if edit.move_end() {
+                    return TabPanelEditOutcome::Changed;
+                }
+            },
+            Key::Named(NamedKey::Tab) => {
+                return TabPanelEditOutcome::None;
+            },
+            _ => (),
+        }
+
+        let text = key.text_with_all_modifiers().unwrap_or_default();
+        if edit.insert_text(&text) {
+            TabPanelEditOutcome::Changed
+        } else {
+            TabPanelEditOutcome::None
+        }
+    }
+
+    pub fn handle_ime_commit(&mut self, text: &str) -> TabPanelEditOutcome {
+        let Some(edit) = self.edit.as_mut() else {
+            return TabPanelEditOutcome::None;
+        };
+
+        if edit.insert_text(text) {
+            TabPanelEditOutcome::Changed
+        } else {
+            TabPanelEditOutcome::None
+        }
+    }
+
+    fn begin_edit(&mut self, target: TabPanelEditTarget, text: String) -> bool {
+        let cursor = text.chars().count();
+        let next = EditState { target, text, cursor };
+        let changed = self.edit.as_ref() != Some(&next);
+        self.edit = Some(next);
+        self.drag = None;
+        self.resize = None;
+        self.drop_target = None;
+        changed
+    }
+
+    fn validate_edit_target(&mut self) {
+        let Some(edit) = &self.edit else {
+            return;
+        };
+
+        let valid = match edit.target {
+            TabPanelEditTarget::Tab(tab_id) => self
+                .groups
+                .iter()
+                .any(|group| group.tabs.iter().any(|tab| tab.tab_id == tab_id)),
+            TabPanelEditTarget::Group(group_id) => {
+                self.groups.iter().any(|group| group.id == group_id)
+            },
+        };
+
+        if !valid {
+            self.edit = None;
+        }
+    }
+
+    fn take_edit_commit(&mut self) -> TabPanelEditCommit {
+        let edit = self.edit.take().expect("edit state required");
+        TabPanelEditCommit { target: edit.target, text: edit.text }
     }
 
     pub fn cursor_moved(
@@ -101,28 +271,51 @@ impl TabPanel {
     ) -> TabPanelCursorUpdate {
         self.last_mouse_pos = Some(position);
 
-        let capture = self.should_capture(Some(position));
+        let panel_size_info = self.panel_size_info(size_info);
+        let resizing = self.resize.is_some();
+        let resize_hit = !self.drag.is_some() && self.is_on_resize_handle(position);
+        let capture = self.should_capture(Some(position)) || resize_hit;
+
+        if resizing {
+            let width_px = self.resize.as_ref().unwrap().width(position);
+            return TabPanelCursorUpdate {
+                capture: true,
+                needs_redraw: true,
+                cursor: Some(CursorIcon::EwResize),
+                resize_width: Some(width_px),
+            };
+        }
+
         if !capture {
             let needs_redraw = self.hover != HoverState::default() || self.drop_target.is_some();
             self.hover = HoverState::default();
             self.drop_target = None;
-            return TabPanelCursorUpdate { capture: false, needs_redraw, cursor: None };
+            return TabPanelCursorUpdate {
+                capture: false,
+                needs_redraw,
+                cursor: None,
+                resize_width: None,
+            };
         }
 
-        let hit = self.hit_test(position, size_info);
+        let hit = if resize_hit { None } else { self.hit_test(position, &panel_size_info) };
         let next_hover = HoverState::from_hit(&hit);
         let drag_started = self.update_drag(position);
         let needs_redraw = drag_started
             || next_hover != self.hover
-            || self.update_drop_target(hit.as_ref());
+            || self.update_drop_target(position, &panel_size_info);
         self.hover = next_hover;
 
-        let cursor = match hit {
-            Some(PanelHit::NewTabButton | PanelHit::Tab { .. }) => Some(CursorIcon::Pointer),
-            _ => Some(CursorIcon::Default),
+        let cursor = if resize_hit {
+            Some(CursorIcon::EwResize)
+        } else {
+            match hit {
+                Some(PanelHit::Tab { .. }) => Some(CursorIcon::Pointer),
+                _ => Some(CursorIcon::Default),
+            }
         };
 
-        TabPanelCursorUpdate { capture: true, needs_redraw, cursor }
+        TabPanelCursorUpdate { capture: true, needs_redraw, cursor, resize_width: None }
     }
 
     pub fn mouse_input(
@@ -136,62 +329,101 @@ impl TabPanel {
             None => return TabPanelMouseUpdate::default(),
         };
 
+        let panel_size_info = self.panel_size_info(size_info);
         let capture = self.should_capture(Some(position));
         if !capture {
             return TabPanelMouseUpdate::default();
         }
 
-        if button != MouseButton::Left {
+        if button == MouseButton::Right {
+            if !matches!(state, ElementState::Released) {
+                return TabPanelMouseUpdate { capture, needs_redraw: false, command: None };
+            }
+
+            let hit = self.hit_test(position, &panel_size_info);
+            let command = match hit {
+                Some(PanelHit::Tab { tab_id }) => Some(TabPanelCommand::RenameTab(tab_id)),
+                Some(PanelHit::Group { group_index }) => self
+                    .groups
+                    .get(group_index)
+                    .map(|group| TabPanelCommand::RenameGroup(group.id)),
+                None => None,
+            };
+
             return TabPanelMouseUpdate {
                 capture,
-                needs_redraw: false,
-                command: None,
-                create_tab: false,
+                needs_redraw: command.is_some(),
+                command,
             };
         }
 
-        let hit = self.hit_test(position, size_info);
+        if button != MouseButton::Left {
+            return TabPanelMouseUpdate { capture, needs_redraw: false, command: None };
+        }
+
+        if matches!(state, ElementState::Pressed) && self.is_on_resize_handle(position) {
+            self.resize = Some(ResizeState::new(self.width_px, position));
+            return TabPanelMouseUpdate { capture: true, needs_redraw: true, command: None };
+        }
+
+        if matches!(state, ElementState::Released) && self.resize.take().is_some() {
+            return TabPanelMouseUpdate { capture: true, needs_redraw: true, command: None };
+        }
+
+        let hit = self.hit_test(position, &panel_size_info);
         let mut needs_redraw = false;
         let mut command = None;
-        let mut create_tab = false;
 
         match state {
             ElementState::Pressed => {
-                if let Some(PanelHit::Tab { tab_id, group_index }) = hit {
-                    self.drag = Some(DragState::new(tab_id, group_index, position));
-                    needs_redraw = true;
+                if let Some(PanelHit::Tab { tab_id }) = hit {
+                    if !self.is_close_hit(position, &panel_size_info) {
+                        self.drag = Some(DragState::new(tab_id, position));
+                        needs_redraw = true;
+                    }
                 }
             },
             ElementState::Released => {
                 if let Some(drag) = self.drag.take() {
                     if drag.dragging {
-                        if let Some(target_group) = self.drop_target {
-                            if target_group != drag.origin_group {
-                                command = Some(TabPanelCommand::Move {
-                                    tab_id: drag.tab_id,
-                                    target_group: Some(target_group),
-                                });
-                            }
+                        if let Some(target) = self.compute_drop_target(position, &panel_size_info) {
+                            command = Some(TabPanelCommand::Move {
+                                tab_id: drag.tab_id,
+                                target_group_id: Some(target.group_id),
+                                target_index: Some(target.index),
+                            });
                         } else if self.is_inside_panel(position) {
                             command = Some(TabPanelCommand::Move {
                                 tab_id: drag.tab_id,
-                                target_group: None,
+                                target_group_id: None,
+                                target_index: None,
                             });
                         }
-                    } else if let Some(PanelHit::Tab { tab_id, .. }) = hit {
-                        command = Some(TabPanelCommand::Focus(tab_id));
+                    } else if let Some(PanelHit::Tab { tab_id }) = hit {
+                        if self.is_close_hit(position, &panel_size_info)
+                            && self.hover.tab == Some(tab_id)
+                        {
+                            command = Some(TabPanelCommand::Close(tab_id));
+                        } else {
+                            command = Some(TabPanelCommand::Focus(tab_id));
+                        }
                     }
 
                     self.drop_target = None;
                     needs_redraw = true;
-                } else if matches!(hit, Some(PanelHit::NewTabButton)) {
-                    create_tab = true;
+                } else if let Some(PanelHit::Tab { tab_id }) = hit {
+                    if self.is_close_hit(position, &panel_size_info) && self.hover.tab == Some(tab_id)
+                    {
+                        command = Some(TabPanelCommand::Close(tab_id));
+                    } else {
+                        command = Some(TabPanelCommand::Focus(tab_id));
+                    }
                     needs_redraw = true;
                 }
             },
         }
 
-        TabPanelMouseUpdate { capture, needs_redraw, command, create_tab }
+        TabPanelMouseUpdate { capture, needs_redraw, command }
     }
 
     pub fn push_rects(&self, size_info: &SizeInfo, config: &UiConfig, rects: &mut Vec<RenderRect>) {
@@ -199,12 +431,12 @@ impl TabPanel {
             return;
         }
 
-        let layout = self.layout(size_info);
+        let panel_size_info = self.panel_size_info(size_info);
+        let layout = self.layout(&panel_size_info);
         let base = config.colors.primary.background;
         let fg = config.colors.primary.foreground;
         let panel_bg = mix(base, fg, 0.04);
         let header_bg = mix(base, fg, 0.08);
-        let hover_bg = mix(base, fg, 0.12);
         let active_bg = mix(base, fg, 0.18);
         let drop_bg = mix(base, fg, 0.24);
         let divider = mix(base, fg, 0.2);
@@ -222,33 +454,24 @@ impl TabPanel {
             ));
         }
 
-        let line_height = size_info.cell_height();
-        let start_y = size_info.padding_y();
+        let line_height = panel_size_info.cell_height();
+        let start_y = panel_size_info.padding_y();
 
         for item in layout.items {
             let y = start_y + item.line as f32 * line_height;
             let bg = match item.kind {
-                PanelItemKind::NewTabButton => {
-                    if self.hover.new_tab {
-                        hover_bg
-                    } else {
-                        header_bg
-                    }
-                },
                 PanelItemKind::GroupHeader { group_index } => {
-                    if Some(group_index) == self.drop_target {
+                    if self.drop_target.is_some_and(|target| target.group_index == group_index) {
                         drop_bg
                     } else {
                         header_bg
                     }
                 },
                 PanelItemKind::Tab { tab, group_index } => {
-                    if Some(group_index) == self.drop_target {
+                    if self.drop_target.is_some_and(|target| target.group_index == group_index) {
                         drop_bg
                     } else if tab.is_active {
                         active_bg
-                    } else if self.hover.tab == Some(tab.tab_id) {
-                        hover_bg
                     } else {
                         panel_bg
                     }
@@ -270,47 +493,70 @@ impl TabPanel {
             return;
         }
 
-        let layout = self.layout(size_info);
-        let panel_size_info = SizeInfo::new(
-            size_info.width(),
-            size_info.height(),
-            size_info.cell_width(),
-            size_info.cell_height(),
-            0.,
-            0.,
-            size_info.padding_y(),
-            false,
-        );
+        let panel_size_info = self.panel_size_info(size_info);
+        let layout = self.layout(&panel_size_info);
+
+        #[cfg(target_os = "macos")]
+        {
+            let font_key = glyph_cache.font_key;
+            let font_size = glyph_cache.font_size;
+            let metrics = glyph_cache.font_metrics();
+            let mut missing = Vec::new();
+
+            for item in &layout.items {
+                if let PanelItemKind::Tab { tab, .. } = &item.kind {
+                    if let Some(favicon) = &tab.favicon {
+                        let key =
+                            GlyphKey { font_key, size: font_size, character: favicon.character };
+                        if !glyph_cache.has_glyph(&key) {
+                            missing.push((key, favicon.clone()));
+                        }
+                    }
+                }
+            }
+
+            if !missing.is_empty() {
+                renderer.with_loader(|mut api| {
+                    for (key, favicon) in missing {
+                        let rasterized =
+                            favicon.image.rasterized_glyph(favicon.character, &panel_size_info, metrics);
+                        glyph_cache.insert_custom_glyph(key, rasterized, &mut api);
+                    }
+                });
+            }
+        }
+
+        renderer.set_viewport(&panel_size_info);
+        renderer.set_text_projection(&panel_size_info);
 
         let base = config.colors.primary.background;
         let fg = config.colors.primary.foreground;
         let panel_bg = mix(base, fg, 0.04);
         let header_bg = mix(base, fg, 0.08);
-        let hover_bg = mix(base, fg, 0.12);
         let active_bg = mix(base, fg, 0.18);
         let drop_bg = mix(base, fg, 0.24);
         let header_fg = mix(fg, base, 0.2);
+        let now = Instant::now();
 
         for item in layout.items {
             match item.kind {
-                PanelItemKind::NewTabButton => {
-                    let text = "+";
-                    let bg = if self.hover.new_tab { hover_bg } else { header_bg };
-                    let point = Point::new(item.line, Column(0));
-                    renderer.draw_string(
-                        point,
-                        header_fg,
-                        bg,
-                        text.chars(),
-                        &panel_size_info,
-                        glyph_cache,
-                    );
-                },
                 PanelItemKind::GroupHeader { group_index } => {
                     if let Some(group) = self.groups.get(group_index) {
-                        let title = format!("{}:", group.label);
+                        let label = match &self.edit {
+                            Some(edit)
+                                if edit.target == TabPanelEditTarget::Group(group.id) =>
+                            {
+                                let name = render_edit_text(&edit.text, edit.cursor);
+                                format!("{} {}", group.id, name)
+                            },
+                            _ => group.label.clone(),
+                        };
+                        let title = format!("{}:", label);
                         let text = truncate_to_columns(&title, self.width_cols.saturating_sub(1));
-                        let bg = if Some(group_index) == self.drop_target {
+                        let bg = if self
+                            .drop_target
+                            .is_some_and(|target| target.group_index == group_index)
+                        {
                             drop_bg
                         } else {
                             header_bg
@@ -328,19 +574,50 @@ impl TabPanel {
                 },
                 PanelItemKind::Tab { tab, group_index } => {
                     let indent = 1;
-                    let max_cols = self.width_cols.saturating_sub(indent + 1);
-                    let label = format!("{} {}", tab.kind.indicator(), tab.title);
+                    let indicator_cols =
+                        if tab.activity.is_some() { ACTIVITY_INDICATOR_COLS } else { 0 };
+                    let text_col = indent + indicator_cols;
+                    let close_col = self.width_cols.saturating_sub(1);
+                    let max_cols = self.width_cols.saturating_sub(text_col + 1);
+                    let title = match &self.edit {
+                        Some(edit) if edit.target == TabPanelEditTarget::Tab(tab.tab_id) => {
+                            render_edit_text(&edit.text, edit.cursor)
+                        },
+                        _ => tab.title.clone(),
+                    };
+                    #[cfg(target_os = "macos")]
+                    let label = if let Some(favicon) = &tab.favicon {
+                        format!("{}  {}", favicon.character, title)
+                    } else {
+                        title
+                    };
+                    #[cfg(not(target_os = "macos"))]
+                    let label = title;
                     let text = truncate_to_columns(&label, max_cols);
-                    let bg = if Some(group_index) == self.drop_target {
+                    let bg = if self
+                        .drop_target
+                        .is_some_and(|target| target.group_index == group_index)
+                    {
                         drop_bg
-                    } else if Some(tab.tab_id) == self.hover.tab {
-                        hover_bg
                     } else if tab.is_active {
                         active_bg
                     } else {
                         panel_bg
                     };
-                    let point = Point::new(item.line, Column(indent));
+
+                    if let Some(indicator) = tab_activity_indicator(&tab, now, base, fg, config) {
+                        let point = Point::new(item.line, Column(indent));
+                        renderer.draw_string(
+                            point,
+                            indicator.color,
+                            bg,
+                            std::iter::once(indicator.glyph),
+                            &panel_size_info,
+                            glyph_cache,
+                        );
+                    }
+
+                    let point = Point::new(item.line, Column(text_col));
                     renderer.draw_string(
                         point,
                         fg,
@@ -349,9 +626,24 @@ impl TabPanel {
                         &panel_size_info,
                         glyph_cache,
                     );
+
+                    if close_col > text_col && self.hover.tab == Some(tab.tab_id) {
+                        let point = Point::new(item.line, Column(close_col));
+                        renderer.draw_string(
+                            point,
+                            fg,
+                            bg,
+                            "x".chars(),
+                            &panel_size_info,
+                            glyph_cache,
+                        );
+                    }
                 },
             }
         }
+
+        renderer.set_viewport(size_info);
+        renderer.set_text_projection(size_info);
     }
 
     pub fn should_capture(&self, position: Option<PhysicalPosition<f64>>) -> bool {
@@ -359,11 +651,11 @@ impl TabPanel {
             return false;
         }
 
-        if self.drag.is_some() {
+        if self.drag.is_some() || self.resize.is_some() {
             return true;
         }
 
-        position.is_some_and(|pos| self.is_inside_panel(pos))
+        position.is_some_and(|pos| self.is_inside_panel(pos) || self.is_on_resize_handle(pos))
     }
 
     pub fn should_capture_last(&self) -> bool {
@@ -389,25 +681,137 @@ impl TabPanel {
         false
     }
 
+    fn panel_cell_height(&self, size_info: &SizeInfo) -> f32 {
+        let min_height = (size_info.cell_width() * PANEL_ICON_SCALE).ceil();
+        size_info.cell_height().max(min_height) + PANEL_ROW_PADDING_PX
+    }
+
+    fn panel_size_info(&self, size_info: &SizeInfo) -> SizeInfo {
+        SizeInfo::new(
+            self.width_px,
+            size_info.height(),
+            size_info.cell_width(),
+            self.panel_cell_height(size_info),
+            0.,
+            0.,
+            size_info.padding_y(),
+            false,
+        )
+    }
+
+    fn is_close_hit(&self, position: PhysicalPosition<f64>, size_info: &SizeInfo) -> bool {
+        if self.width_cols == 0 {
+            return false;
+        }
+
+        let cell_width = size_info.cell_width() as f64;
+        if cell_width <= 0.0 {
+            return false;
+        }
+
+        let close_col = self.width_cols.saturating_sub(1);
+        if close_col <= 1 {
+            return false;
+        }
+
+        let col = (position.x / cell_width).floor() as usize;
+        col == close_col
+    }
+
     fn is_inside_panel(&self, position: PhysicalPosition<f64>) -> bool {
         position.x >= 0.0 && position.x < self.width_px as f64
     }
 
-    fn update_drop_target(&mut self, hit: Option<&PanelHit>) -> bool {
-        if self.drag.is_none() {
+    fn is_on_resize_handle(&self, position: PhysicalPosition<f64>) -> bool {
+        if !self.is_enabled() {
+            return false;
+        }
+
+        let left = (self.width_px as f64 - RESIZE_HANDLE_WIDTH_PX).max(0.0);
+        let right = self.width_px as f64 + RESIZE_HANDLE_WIDTH_PX;
+        position.x >= left && position.x <= right
+    }
+
+    fn update_drop_target(&mut self, position: PhysicalPosition<f64>, size_info: &SizeInfo) -> bool {
+        let dragging = self.drag.as_ref().is_some_and(|drag| drag.dragging);
+        if !dragging {
             if self.drop_target.take().is_some() {
                 return true;
             }
             return false;
         }
 
-        let next = hit.and_then(|hit| hit.group_index());
+        let next = self.compute_drop_target(position, size_info);
         if next != self.drop_target {
             self.drop_target = next;
             return true;
         }
 
         false
+    }
+
+    fn compute_drop_target(
+        &self,
+        position: PhysicalPosition<f64>,
+        size_info: &SizeInfo,
+    ) -> Option<DropTarget> {
+        if !self.is_inside_panel(position) {
+            return None;
+        }
+
+        let top = size_info.padding_y() as f64;
+        if position.y < top {
+            return None;
+        }
+
+        let line_height = size_info.cell_height() as f64;
+        let mut line = ((position.y - top) / line_height).floor() as usize;
+        let max_lines = size_info.screen_lines();
+        if max_lines == 0 {
+            return None;
+        }
+        if line >= max_lines {
+            line = max_lines - 1;
+        }
+
+        let mut current_line = 0;
+
+        for (group_index, group) in self.groups.iter().enumerate() {
+            if current_line >= max_lines {
+                break;
+            }
+
+            let header_line = current_line;
+            let remaining_lines = max_lines.saturating_sub(header_line + 1);
+            let visible_tabs = group.tabs.len().min(remaining_lines);
+            let tabs_start = header_line + 1;
+            let tabs_end = header_line + visible_tabs;
+            let blank_line = if visible_tabs < remaining_lines {
+                Some(tabs_end + 1)
+            } else {
+                None
+            };
+            let group_end = blank_line.unwrap_or(tabs_end);
+
+            if line >= header_line && line <= group_end {
+                let index = if line == header_line {
+                    0
+                } else if line >= tabs_start && line <= tabs_end && visible_tabs > 0 {
+                    line - tabs_start
+                } else {
+                    visible_tabs
+                };
+                return Some(DropTarget {
+                    group_index,
+                    group_id: group.id,
+                    index,
+                });
+            }
+
+            current_line = group_end + 1;
+        }
+
+        None
     }
 
     fn hit_test(&self, position: PhysicalPosition<f64>, size_info: &SizeInfo) -> Option<PanelHit> {
@@ -429,11 +833,8 @@ impl TabPanel {
             .into_iter()
             .find(|item| item.line == line)
             .map(|item| match item.kind {
-                PanelItemKind::NewTabButton => PanelHit::NewTabButton,
                 PanelItemKind::GroupHeader { group_index } => PanelHit::Group { group_index },
-                PanelItemKind::Tab { tab, group_index, .. } => {
-                    PanelHit::Tab { tab_id: tab.tab_id, group_index }
-                },
+                PanelItemKind::Tab { tab, .. } => PanelHit::Tab { tab_id: tab.tab_id },
             })
     }
 
@@ -441,14 +842,6 @@ impl TabPanel {
         let mut items = Vec::new();
         let max_lines = size_info.screen_lines();
         let mut line = 0;
-
-        if line < max_lines {
-            items.push(PanelItem {
-                line,
-                kind: PanelItemKind::NewTabButton,
-            });
-            line += 1;
-        }
 
         for (group_index, group) in self.groups.iter().enumerate() {
             if line >= max_lines {
@@ -482,23 +875,98 @@ impl TabPanel {
     }
 }
 
+impl EditState {
+    fn move_left(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+
+        self.cursor -= 1;
+        true
+    }
+
+    fn move_right(&mut self) -> bool {
+        let len = self.text.chars().count();
+        if self.cursor >= len {
+            return false;
+        }
+
+        self.cursor += 1;
+        true
+    }
+
+    fn move_home(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+
+        self.cursor = 0;
+        true
+    }
+
+    fn move_end(&mut self) -> bool {
+        let len = self.text.chars().count();
+        if self.cursor == len {
+            return false;
+        }
+
+        self.cursor = len;
+        true
+    }
+
+    fn backspace(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+
+        let start = char_to_byte_idx(&self.text, self.cursor - 1);
+        let end = char_to_byte_idx(&self.text, self.cursor);
+        self.text.replace_range(start..end, "");
+        self.cursor -= 1;
+        true
+    }
+
+    fn delete(&mut self) -> bool {
+        let len = self.text.chars().count();
+        if self.cursor >= len {
+            return false;
+        }
+
+        let start = char_to_byte_idx(&self.text, self.cursor);
+        let end = char_to_byte_idx(&self.text, self.cursor + 1);
+        self.text.replace_range(start..end, "");
+        true
+    }
+
+    fn insert_text(&mut self, text: &str) -> bool {
+        let mut filtered = String::new();
+        for ch in text.chars() {
+            if !ch.is_control() {
+                filtered.push(ch);
+            }
+        }
+
+        if filtered.is_empty() {
+            return false;
+        }
+
+        let idx = char_to_byte_idx(&self.text, self.cursor);
+        self.text.insert_str(idx, &filtered);
+        self.cursor += filtered.chars().count();
+        true
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Eq)]
 struct HoverState {
     tab: Option<TabId>,
-    group: Option<usize>,
-    new_tab: bool,
 }
 
 impl HoverState {
     fn from_hit(hit: &Option<PanelHit>) -> Self {
         match hit {
-            Some(PanelHit::Tab { tab_id, group_index }) => {
-                HoverState { tab: Some(*tab_id), group: Some(*group_index), new_tab: false }
-            }
-            Some(PanelHit::Group { group_index }) => {
-                HoverState { tab: None, group: Some(*group_index), new_tab: false }
-            }
-            Some(PanelHit::NewTabButton) => HoverState { tab: None, group: None, new_tab: true },
+            Some(PanelHit::Tab { tab_id }) => HoverState { tab: Some(*tab_id) },
+            Some(PanelHit::Group { .. }) => HoverState::default(),
             None => HoverState::default(),
         }
     }
@@ -506,14 +974,34 @@ impl HoverState {
 
 struct DragState {
     tab_id: TabId,
-    origin_group: usize,
     start_pos: PhysicalPosition<f64>,
     dragging: bool,
 }
 
 impl DragState {
-    fn new(tab_id: TabId, origin_group: usize, start_pos: PhysicalPosition<f64>) -> Self {
-        Self { tab_id, origin_group, start_pos, dragging: false }
+    fn new(tab_id: TabId, start_pos: PhysicalPosition<f64>) -> Self {
+        Self { tab_id, start_pos, dragging: false }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DropTarget {
+    group_index: usize,
+    group_id: usize,
+    index: usize,
+}
+
+struct ResizeState {
+    offset: f64,
+}
+
+impl ResizeState {
+    fn new(width_px: f32, position: PhysicalPosition<f64>) -> Self {
+        Self { offset: width_px as f64 - position.x }
+    }
+
+    fn width(&self, position: PhysicalPosition<f64>) -> f32 {
+        (position.x + self.offset).max(0.0) as f32
     }
 }
 
@@ -525,7 +1013,6 @@ struct PanelItem {
 
 #[derive(Clone)]
 enum PanelItemKind {
-    NewTabButton,
     GroupHeader { group_index: usize },
     Tab { tab: TabPanelTab, group_index: usize },
 }
@@ -536,19 +1023,8 @@ struct PanelLayout {
 
 #[derive(Clone)]
 enum PanelHit {
-    NewTabButton,
     Group { group_index: usize },
-    Tab { tab_id: TabId, group_index: usize },
-}
-
-impl PanelHit {
-    fn group_index(&self) -> Option<usize> {
-        match self {
-            PanelHit::NewTabButton => None,
-            PanelHit::Group { group_index } => Some(*group_index),
-            PanelHit::Tab { group_index, .. } => Some(*group_index),
-        }
-    }
+    Tab { tab_id: TabId },
 }
 
 #[derive(Default)]
@@ -556,6 +1032,7 @@ pub struct TabPanelCursorUpdate {
     pub capture: bool,
     pub needs_redraw: bool,
     pub cursor: Option<CursorIcon>,
+    pub resize_width: Option<f32>,
 }
 
 #[derive(Default)]
@@ -563,7 +1040,37 @@ pub struct TabPanelMouseUpdate {
     pub capture: bool,
     pub needs_redraw: bool,
     pub command: Option<TabPanelCommand>,
-    pub create_tab: bool,
+}
+
+fn render_edit_text(text: &str, cursor: usize) -> String {
+    let cursor = cursor.min(text.chars().count());
+    let mut output = String::new();
+    let mut index = 0;
+
+    for ch in text.chars() {
+        if index == cursor {
+            output.push('|');
+        }
+        output.push(ch);
+        index += 1;
+    }
+
+    if cursor == index {
+        output.push('|');
+    }
+
+    output
+}
+
+fn char_to_byte_idx(text: &str, char_idx: usize) -> usize {
+    if char_idx == 0 {
+        return 0;
+    }
+
+    text.char_indices()
+        .nth(char_idx)
+        .map(|(idx, _)| idx)
+        .unwrap_or_else(|| text.len())
 }
 
 fn truncate_to_columns(text: &str, max_cols: usize) -> String {
@@ -584,6 +1091,40 @@ fn truncate_to_columns(text: &str, max_cols: usize) -> String {
     }
 
     output
+}
+
+struct ActivityIndicator {
+    glyph: char,
+    color: Rgb,
+}
+
+fn tab_activity_indicator(
+    tab: &TabPanelTab,
+    now: Instant,
+    base: Rgb,
+    fg: Rgb,
+    config: &UiConfig,
+) -> Option<ActivityIndicator> {
+    let activity = tab.activity.as_ref()?;
+
+    if activity.is_active(now) {
+        return Some(ActivityIndicator {
+            glyph: ACTIVITY_INDICATOR_FILLED,
+            color: config.colors.normal.green,
+        });
+    }
+
+    if activity.has_unseen_output {
+        return Some(ActivityIndicator {
+            glyph: ACTIVITY_INDICATOR_FILLED,
+            color: config.colors.normal.blue,
+        });
+    }
+
+    Some(ActivityIndicator {
+        glyph: ACTIVITY_INDICATOR_OUTLINE,
+        color: mix(fg, base, 0.5),
+    })
 }
 
 fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {

@@ -115,6 +115,10 @@ pub trait ActionContext<T: EventListener> {
     fn clipboard_mut(&mut self) -> &mut Clipboard;
     fn scheduler_mut(&mut self) -> &mut Scheduler;
     #[cfg(target_os = "macos")]
+    fn web_request_cursor_update(&mut self, _position: PhysicalPosition<f64>) {}
+    #[cfg(target_os = "macos")]
+    fn web_mouse_input(&mut self, _state: ElementState, _button: MouseButton) {}
+    #[cfg(target_os = "macos")]
     fn select_next_tab(&mut self) {}
     #[cfg(target_os = "macos")]
     fn select_previous_tab(&mut self) {}
@@ -471,6 +475,8 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     #[inline]
     pub fn mouse_moved(&mut self, position: PhysicalPosition<f64>) {
         if self.ctx.window_kind().is_web() {
+            #[cfg(target_os = "macos")]
+            self.ctx.web_request_cursor_update(position);
             return;
         }
 
@@ -1001,6 +1007,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     /// Reset mouse cursor based on modifier and terminal state.
     #[inline]
     pub fn reset_mouse_cursor(&mut self) {
+        if self.ctx.window_kind().is_web() {
+            return;
+        }
+
         let mouse_state = self.cursor_state();
         self.ctx.window().set_mouse_cursor(mouse_state);
     }
@@ -1008,6 +1018,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     /// Modifier state change.
     pub fn modifiers_input(&mut self, modifiers: Modifiers) {
         *self.ctx.modifiers() = modifiers;
+
+        if self.ctx.window_kind().is_web() {
+            return;
+        }
 
         // Prompt hint highlight update.
         self.ctx.mouse_mut().hint_highlight_dirty = true;
@@ -1019,6 +1033,8 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     pub fn mouse_input(&mut self, state: ElementState, button: MouseButton) {
         if self.ctx.window_kind().is_web() {
+            #[cfg(target_os = "macos")]
+            self.ctx.web_mouse_input(state, button);
             return;
         }
 
@@ -1105,13 +1121,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     /// Check mouse icon state in relation to the message bar.
     fn message_bar_cursor_state(&self) -> Option<CursorIcon> {
-        // Since search is above the message bar, the button is offset by search's height.
-        let search_height = usize::from(self.ctx.search_active());
-
         // Calculate Y position of the end of the last terminal line.
         let size = self.ctx.size_info();
         let terminal_end = size.padding_y() as usize
-            + size.cell_height() as usize * (size.screen_lines() + search_height);
+            + size.cell_height() as usize * size.screen_lines();
 
         let mouse = self.ctx.mouse();
         let display_offset = self.ctx.terminal().grid().display_offset();
@@ -1413,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn web_tab_ignores_mouse_input() {
+    fn web_tab_mouse_input_does_not_touch_terminal_state() {
         let mut clipboard = Clipboard::new_nop();
         let cfg = UiConfig::default();
         let size = SizeInfo::new(21.0, 51.0, 3.0, 3.0, 0., 0., 0., false);
@@ -1441,7 +1454,7 @@ mod tests {
     }
 
     #[test]
-    fn web_tab_ignores_mouse_wheel() {
+    fn web_tab_mouse_wheel_does_not_scroll_terminal() {
         let mut clipboard = Clipboard::new_nop();
         let cfg = UiConfig::default();
         let size = SizeInfo::new(21.0, 51.0, 3.0, 3.0, 0., 0., 0., false);
@@ -1466,6 +1479,35 @@ mod tests {
         processor.mouse_wheel_input(MouseScrollDelta::LineDelta(0.0, 1.0), TouchPhase::Moved);
 
         assert_eq!(processor.ctx.terminal.grid().display_offset(), 0);
+    }
+
+    #[test]
+    fn web_tab_mouse_move_does_not_touch_terminal_state() {
+        let mut clipboard = Clipboard::new_nop();
+        let cfg = UiConfig::default();
+        let size = SizeInfo::new(21.0, 51.0, 3.0, 3.0, 0., 0., 0., false);
+        let mut terminal = Term::new(cfg.term_options(), &size, MockEventProxy);
+        let mut mouse = Mouse::default();
+        let mut inline_search_state = InlineSearchState::default();
+        let mut message_buffer = MessageBuffer::default();
+
+        let context = ActionContext {
+            terminal: &mut terminal,
+            mouse: &mut mouse,
+            size_info: &size,
+            clipboard: &mut clipboard,
+            modifiers: Default::default(),
+            message_buffer: &mut message_buffer,
+            inline_search_state: &mut inline_search_state,
+            config: &cfg,
+            window_kind: WindowKind::Web { url: String::from("about:blank") },
+        };
+
+        let mut processor = Processor::new(context);
+        processor.mouse_moved(PhysicalPosition::new(10.0, 20.0));
+
+        assert_eq!(processor.ctx.mouse.x, 0);
+        assert_eq!(processor.ctx.mouse.y, 0);
     }
 
     test_clickstate! {

@@ -35,6 +35,7 @@ impl From<&WindowKind> for TabKind {
 }
 
 impl TabKind {
+    #[allow(dead_code)]
     pub fn indicator(&self) -> &'static str {
         match self {
             Self::Terminal => "T",

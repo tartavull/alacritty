@@ -23,18 +23,6 @@
           extensions = [ "rust-src" "rustfmt" "clippy" ];
         };
 
-        darwinFrameworks = lib.optionals pkgs.stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
-          AppKit
-          Cocoa
-          CoreGraphics
-          CoreText
-          CoreVideo
-          IOKit
-          Metal
-          OpenGL
-          QuartzCore
-        ]);
-
         darwinLibraries = lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
 
         linuxLibraries = lib.optionals pkgs.stdenv.isLinux (with pkgs; [
@@ -58,9 +46,12 @@
             python3
             gnumake
             (writeShellScriptBin "run" ''
+              if [ -x "$HOME/.nix-profile/bin/zsh" ]; then
+                export SHELL="$HOME/.nix-profile/bin/zsh"
+              fi
               exec cargo run -p alacritty --bin alacritty
             '')
-          ] ++ darwinFrameworks ++ darwinLibraries ++ linuxLibraries;
+          ] ++ darwinLibraries ++ linuxLibraries;
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 

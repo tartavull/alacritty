@@ -306,6 +306,10 @@ pub struct WindowOptions {
     pub window_identity: WindowIdentity,
 
     #[clap(skip)]
+    #[serde(default)]
+    pub command_input: Option<String>,
+
+    #[clap(skip)]
     #[cfg(not(any(target_os = "macos", windows)))]
     /// `ActivationToken` that we pass to winit.
     pub activation_token: Option<String>,

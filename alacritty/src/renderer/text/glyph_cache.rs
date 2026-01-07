@@ -244,6 +244,24 @@ impl GlyphCache {
         *self.cache.entry(glyph_key).or_insert(glyph)
     }
 
+    pub fn has_glyph(&self, glyph_key: &GlyphKey) -> bool {
+        self.cache.contains_key(glyph_key)
+    }
+
+    pub fn insert_custom_glyph<L>(
+        &mut self,
+        glyph_key: GlyphKey,
+        rasterized: RasterizedGlyph,
+        loader: &mut L,
+    ) -> Glyph
+    where
+        L: LoadGlyph + ?Sized,
+    {
+        let glyph = self.load_glyph(loader, rasterized);
+        self.cache.insert(glyph_key, glyph);
+        glyph
+    }
+
     /// Load glyph into the atlas.
     ///
     /// This will apply all transforms defined for the glyph cache to the rasterized glyph before

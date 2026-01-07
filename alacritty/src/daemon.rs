@@ -219,4 +219,3 @@ pub fn foreground_process_name(
         Ok(name.to_string())
     }
 }
-}

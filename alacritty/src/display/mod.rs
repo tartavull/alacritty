@@ -74,6 +74,8 @@ pub mod window;
 
 #[cfg(target_os = "macos")]
 mod tab_panel;
+#[cfg(target_os = "macos")]
+pub(crate) use tab_panel::{TabPanelEditOutcome, TabPanelEditTarget};
 
 mod bell;
 mod damage;
@@ -707,7 +709,7 @@ impl Display {
         pty_resize_handle: &mut dyn OnResize,
         message_buffer: &MessageBuffer,
         search_state: &mut SearchState,
-        command_state: &CommandState,
+        web_status_bar: bool,
         config: &UiConfig,
     ) where
         T: EventListener,
@@ -774,11 +776,9 @@ impl Display {
         }
 
         // Update number of column/lines in the viewport.
-        let search_active = search_state.history_index.is_some();
         let message_bar_lines = message_buffer.message().map_or(0, |m| m.text(&new_size).len());
-        let search_lines = usize::from(search_active);
-        let command_lines = usize::from(command_state.is_active());
-        new_size.reserve_lines(message_bar_lines + search_lines + command_lines);
+        let status_lines = usize::from(web_status_bar);
+        new_size.reserve_lines(message_bar_lines + status_lines);
 
         // Update resize increments.
         if config.window.resize_increments {
@@ -1000,12 +1000,15 @@ impl Display {
         }
 
         // Handle IME positioning and command/search bar rendering.
+        let footer_offset =
+            if command_active || search_state.regex().is_some() { self.footer_offset() } else { 0. };
+
         let ime_position = if command_active {
             let command_text = Self::format_command(command_state.text(), size_info.columns());
 
-            self.draw_command_bar(config, &command_text);
+            self.draw_command_bar(config, &command_text, footer_offset);
 
-            let line = size_info.screen_lines();
+            let line = size_info.screen_lines().saturating_sub(1);
             let column = Column(command_text.chars().count() - 1);
 
             if self.ime.preedit().is_none() {
@@ -1014,7 +1017,12 @@ impl Display {
                 let cursor_width = NonZeroU32::new(1).unwrap();
                 let cursor =
                     RenderableCursor::new(Point::new(line, column), shape, fg, cursor_width);
-                rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
+                let mut cursor_rects: Vec<_> =
+                    cursor.rects(&size_info, config.cursor.thickness()).collect();
+                for rect in &mut cursor_rects {
+                    rect.y += footer_offset;
+                }
+                rects.extend(cursor_rects);
             }
 
             Some(Point::new(line, column))
@@ -1029,10 +1037,10 @@ impl Display {
                     let search_text = Self::format_search(regex, search_label, size_info.columns());
 
                     // Render the search bar.
-                    self.draw_search(config, &search_text);
+                    self.draw_search(config, &search_text, footer_offset);
 
                     // Draw search bar cursor.
-                    let line = size_info.screen_lines();
+                    let line = size_info.screen_lines().saturating_sub(1);
                     let column = Column(search_text.chars().count() - 1);
 
                     // Add cursor to search bar if IME is not active.
@@ -1046,7 +1054,12 @@ impl Display {
                             fg,
                             cursor_width,
                         );
-                        rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
+                        let mut cursor_rects: Vec<_> =
+                            cursor.rects(&size_info, config.cursor.thickness()).collect();
+                        for rect in &mut cursor_rects {
+                            rect.y += footer_offset;
+                        }
+                        rects.extend(cursor_rects);
                     }
 
                     Some(Point::new(line, column))
@@ -1071,17 +1084,15 @@ impl Display {
                     (foreground_color, background_color)
                 };
 
-                self.draw_ime_preview(point, fg, bg, &mut rects, config);
+                self.draw_ime_preview(point, fg, bg, &mut rects, config, footer_offset);
             }
         }
 
         if let Some(message) = message_buffer.message() {
-            let bar_offset =
-                usize::from(search_state.regex().is_some()) + usize::from(command_active);
             let text = message.text(&size_info);
 
             // Create a new rectangle for the background.
-            let start_line = size_info.screen_lines() + bar_offset;
+            let start_line = size_info.screen_lines();
             let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
 
             let bg = match message.ty() {
@@ -1183,11 +1194,13 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         command_state: &CommandState,
+        status_label: &str,
     ) {
         let size_info = self.size_info;
         let metrics = self.glyph_cache.font_metrics();
         let background_color = config.colors.primary.background;
         let command_active = command_state.is_active();
+        let message_lines = message_buffer.message().map_or(0, |m| m.text(&size_info).len());
 
         self.damage_tracker.frame().mark_fully_damaged();
 
@@ -1211,11 +1224,13 @@ impl Display {
             );
         }
 
+        let footer_offset = if command_active { self.footer_offset() } else { 0. };
+
         let ime_position = if command_active {
             let command_text = Self::format_command(command_state.text(), size_info.columns());
-            self.draw_command_bar(config, &command_text);
+            self.draw_command_bar(config, &command_text, footer_offset);
 
-            let line = size_info.screen_lines();
+            let line = size_info.screen_lines().saturating_sub(1);
             let column = Column(command_text.chars().count().saturating_sub(1));
 
             if self.ime.preedit().is_none() {
@@ -1223,7 +1238,12 @@ impl Display {
                 let shape = CursorShape::Underline;
                 let cursor_width = NonZeroU32::new(1).unwrap();
                 let cursor = RenderableCursor::new(Point::new(line, column), shape, fg, cursor_width);
-                rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
+                let mut cursor_rects: Vec<_> =
+                    cursor.rects(&size_info, config.cursor.thickness()).collect();
+                for rect in &mut cursor_rects {
+                    rect.y += footer_offset;
+                }
+                rects.extend(cursor_rects);
             }
 
             Some(Point::new(line, column))
@@ -1235,15 +1255,18 @@ impl Display {
             if let Some(point) = ime_position {
                 let fg = config.colors.footer_bar_foreground();
                 let bg = config.colors.footer_bar_background();
-                self.draw_ime_preview(point, fg, bg, &mut rects, config);
+                self.draw_ime_preview(point, fg, bg, &mut rects, config, footer_offset);
             }
         }
 
+        let status_text = Self::format_footer(&format!("-- {status_label} --"), size_info.columns());
+        let status_line = size_info.screen_lines() + message_lines;
+        let status_text = format!("{status_text:<num_cols$}", num_cols = size_info.columns());
+
         if let Some(message) = message_buffer.message() {
-            let bar_offset = usize::from(command_active);
             let text = message.text(&size_info);
 
-            let start_line = size_info.screen_lines() + bar_offset;
+            let start_line = size_info.screen_lines();
             let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
 
             let bg = match message.ty() {
@@ -1253,7 +1276,7 @@ impl Display {
 
             let x = 0;
             let width = size_info.width() as i32;
-            let height = (size_info.height() - y) as i32;
+            let height = (size_info.cell_height() * message_lines as f32) as i32;
             let message_bar_rect =
                 RenderRect::new(x as f32, y, width as f32, height as f32, bg, 1.);
 
@@ -1278,11 +1301,36 @@ impl Display {
                     glyph_cache,
                 );
             }
+
+            let point = Point::new(status_line, Column(0));
+            let fg = config.colors.footer_bar_foreground();
+            let bg = config.colors.footer_bar_background();
+            self.renderer.draw_string(
+                point,
+                fg,
+                bg,
+                status_text.chars(),
+                &size_info,
+                glyph_cache,
+            );
         } else {
             self.renderer.draw_rects(&size_info, &metrics, rects);
 
             #[cfg(target_os = "macos")]
             self.tab_panel.draw_text(&size_info, config, &mut self.renderer, &mut self.glyph_cache);
+
+            let glyph_cache = &mut self.glyph_cache;
+            let point = Point::new(status_line, Column(0));
+            let fg = config.colors.footer_bar_foreground();
+            let bg = config.colors.footer_bar_background();
+            self.renderer.draw_string(
+                point,
+                fg,
+                bg,
+                status_text.chars(),
+                &size_info,
+                glyph_cache,
+            );
         }
 
         self.draw_render_timer(config);
@@ -1403,12 +1451,18 @@ impl Display {
         bg: Rgb,
         rects: &mut Vec<RenderRect>,
         config: &UiConfig,
+        offset_y: f32,
     ) {
+        let mut ime_size_info = self.size_info;
+        if offset_y != 0. {
+            ime_size_info.padding_y += offset_y;
+        }
+
         let preedit = match self.ime.preedit() {
             Some(preedit) => preedit,
             None => {
                 // In case we don't have preedit, just set the popup point.
-                self.window.update_ime_position(point, &self.size_info);
+                self.window.update_ime_position(point, &ime_size_info);
                 return;
             },
         };
@@ -1440,6 +1494,11 @@ impl Display {
         let glyph_cache = &mut self.glyph_cache;
         let metrics = glyph_cache.font_metrics();
 
+        if offset_y != 0. {
+            self.renderer
+                .set_text_projection_with_offset(&self.size_info, (0., offset_y));
+        }
+
         self.renderer.draw_string(
             start,
             fg,
@@ -1448,6 +1507,10 @@ impl Display {
             &self.size_info,
             glyph_cache,
         );
+
+        if offset_y != 0. {
+            self.renderer.set_text_projection(&self.size_info);
+        }
 
         // Damage preedit inside the terminal viewport.
         if point.line < self.size_info.screen_lines() {
@@ -1458,7 +1521,12 @@ impl Display {
 
         // Add underline for preedit text.
         let underline = RenderLine { start, end, color: fg };
-        rects.extend(underline.rects(Flags::UNDERLINE, &metrics, &self.size_info));
+        let mut underline_rects =
+            underline.rects(Flags::UNDERLINE, &metrics, &self.size_info);
+        for rect in &mut underline_rects {
+            rect.y += offset_y;
+        }
+        rects.extend(underline_rects);
 
         let ime_popup_point = match preedit.cursor_end_offset {
             Some(cursor_end_offset) => {
@@ -1476,13 +1544,18 @@ impl Display {
                 );
                 let cursor_point = Point::new(point.line, cursor_column);
                 let cursor = RenderableCursor::new(cursor_point, shape, fg, width);
-                rects.extend(cursor.rects(&self.size_info, config.cursor.thickness()));
+                let mut cursor_rects: Vec<_> =
+                    cursor.rects(&self.size_info, config.cursor.thickness()).collect();
+                for rect in &mut cursor_rects {
+                    rect.y += offset_y;
+                }
+                rects.extend(cursor_rects);
                 cursor_point
             },
             _ => end,
         };
 
-        self.window.update_ime_position(ime_popup_point, &self.size_info);
+        self.window.update_ime_position(ime_popup_point, &ime_size_info);
     }
 
     /// Format search regex to account for the cursor and fullwidth characters.
@@ -1526,6 +1599,15 @@ impl Display {
         // Add place for cursor.
         bar_text.push(' ');
         bar_text
+    }
+
+    /// Format status footer to account for available width.
+    fn format_footer(text: &str, max_width: usize) -> String {
+        if max_width == 0 {
+            return String::new();
+        }
+
+        StrShortener::new(text, max_width, ShortenDirection::Right, Some(SHORTENER)).collect()
     }
 
     /// Draw preview for the currently highlighted `Hyperlink`.
@@ -1592,17 +1674,40 @@ impl Display {
         }
     }
 
+    fn footer_offset(&self) -> f32 {
+        let size_info = self.size_info;
+        let grid_bottom =
+            size_info.padding_y() + size_info.screen_lines() as f32 * size_info.cell_height();
+        (size_info.height() - grid_bottom).max(0.)
+    }
+
+    fn draw_footer_bar_background(&mut self, bg: Rgb, line: usize, offset_y: f32) {
+        let y = self
+            .size_info
+            .cell_height()
+            .mul_add(line as f32, self.size_info.padding_y())
+            + offset_y;
+        let height = self.size_info.cell_height();
+        let rect = RenderRect::new(0., y, self.size_info.width(), height, bg, 1.);
+        let metrics = self.glyph_cache.font_metrics();
+        self.renderer.draw_rects(&self.size_info, &metrics, vec![rect]);
+    }
+
     /// Draw current search regex.
     #[inline(never)]
-    fn draw_search(&mut self, config: &UiConfig, text: &str) {
+    fn draw_search(&mut self, config: &UiConfig, text: &str, offset_y: f32) {
         // Assure text length is at least num_cols.
         let num_cols = self.size_info.columns();
         let text = format!("{text:<num_cols$}");
 
-        let point = Point::new(self.size_info.screen_lines(), Column(0));
-
         let fg = config.colors.footer_bar_foreground();
         let bg = config.colors.footer_bar_background();
+        let line = self.size_info.screen_lines().saturating_sub(1);
+        let point = Point::new(line, Column(0));
+
+        self.renderer
+            .set_text_projection_with_offset(&self.size_info, (0., offset_y));
+        self.draw_footer_bar_background(bg, line, offset_y);
 
         self.renderer.draw_string(
             point,
@@ -1612,17 +1717,24 @@ impl Display {
             &self.size_info,
             &mut self.glyph_cache,
         );
+
+        self.renderer.set_text_projection(&self.size_info);
     }
 
     /// Draw current command input.
     #[inline(never)]
-    fn draw_command_bar(&mut self, config: &UiConfig, text: &str) {
+    fn draw_command_bar(&mut self, config: &UiConfig, text: &str, offset_y: f32) {
         let num_cols = self.size_info.columns();
         let text = format!("{text:<num_cols$}");
 
-        let point = Point::new(self.size_info.screen_lines(), Column(0));
         let fg = config.colors.footer_bar_foreground();
         let bg = config.colors.footer_bar_background();
+        let line = self.size_info.screen_lines().saturating_sub(1);
+        let point = Point::new(line, Column(0));
+
+        self.renderer
+            .set_text_projection_with_offset(&self.size_info, (0., offset_y));
+        self.draw_footer_bar_background(bg, line, offset_y);
 
         self.renderer.draw_string(
             point,
@@ -1632,6 +1744,8 @@ impl Display {
             &self.size_info,
             &mut self.glyph_cache,
         );
+
+        self.renderer.set_text_projection(&self.size_info);
     }
 
     /// Draw render timer.

@@ -79,7 +79,16 @@ pub trait TextRenderer<'a> {
         unsafe {
             let program = self.program();
             gl::UseProgram(program.id());
-            update_projection(program.projection_uniform(), size);
+            update_projection(program.projection_uniform(), size, (0., 0.));
+            gl::UseProgram(0);
+        }
+    }
+
+    fn set_projection_with_offset(&self, size: &SizeInfo, offset: (f32, f32)) {
+        unsafe {
+            let program = self.program();
+            gl::UseProgram(program.id());
+            update_projection(program.projection_uniform(), size, offset);
             gl::UseProgram(0);
         }
     }
@@ -196,7 +205,7 @@ impl LoadGlyph for LoaderApi<'_> {
     }
 }
 
-fn update_projection(u_projection: GLint, size: &SizeInfo) {
+fn update_projection(u_projection: GLint, size: &SizeInfo, offset: (f32, f32)) {
     let width = size.width();
     let height = size.height();
     let padding_x = size.padding_x();
@@ -215,8 +224,8 @@ fn update_projection(u_projection: GLint, size: &SizeInfo) {
     //   [height - 2 * padding_y, 0] to [-1, 1]
     let scale_x = 2. / (width - padding_x - padding_right);
     let scale_y = -2. / (height - 2. * padding_y);
-    let offset_x = -1.;
-    let offset_y = 1.;
+    let offset_x = -1. + scale_x * offset.0;
+    let offset_y = 1. + scale_y * offset.1;
 
     unsafe {
         gl::Uniform4f(u_projection, offset_x, offset_y, scale_x, scale_y);

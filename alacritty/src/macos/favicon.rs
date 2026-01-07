@@ -1,0 +1,161 @@
+use std::io::Read;
+use std::sync::Arc;
+use std::time::Duration;
+
+use crossfont::{BitmapBuffer, Metrics, RasterizedGlyph};
+use image::imageops::{self, FilterType};
+use image::{Rgba, RgbaImage};
+use url::Url;
+
+use crate::display::SizeInfo;
+
+const MAX_FAVICON_BYTES: usize = 512 * 1024;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const FAVICON_SCALE: f32 = 2.0;
+
+#[derive(Clone, Debug)]
+pub struct FaviconImage {
+    width: u32,
+    height: u32,
+    rgba: Arc<[u8]>,
+}
+
+impl FaviconImage {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let image = image::load_from_memory(bytes).ok()?;
+        let rgba = image.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Some(Self { width, height, rgba: Arc::from(rgba.into_raw()) })
+    }
+
+    pub fn rasterized_glyph(
+        &self,
+        character: char,
+        size_info: &SizeInfo,
+        metrics: Metrics,
+    ) -> RasterizedGlyph {
+        let cell_width = size_info.cell_width().round().max(1.0) as i32;
+        let cell_height = size_info.cell_height().round().max(1.0) as i32;
+        let base_size = cell_width.min(cell_height).max(1) as f32;
+        let icon_size = (base_size * FAVICON_SCALE).round().max(1.0) as u32;
+
+        let mut image = self.to_image();
+        if image.width() != icon_size || image.height() != icon_size {
+            image = resize_to_square(&image, icon_size);
+        }
+
+        let mut buffer = image.into_raw();
+        premultiply_rgba(&mut buffer);
+
+        let slot_width = (cell_width as f32 * FAVICON_SCALE).round().max(1.0) as i32;
+        let offset_x = (slot_width - icon_size as i32).max(0) / 2;
+        let offset_y = (cell_height - icon_size as i32).max(0) / 2;
+        let top = cell_height - offset_y + metrics.descent.round() as i32;
+
+        RasterizedGlyph {
+            character,
+            width: icon_size as i32,
+            height: icon_size as i32,
+            top,
+            left: offset_x,
+            advance: (cell_width, 0),
+            buffer: BitmapBuffer::Rgba(buffer),
+        }
+    }
+
+    fn to_image(&self) -> RgbaImage {
+        RgbaImage::from_raw(self.width, self.height, self.rgba.to_vec())
+            .unwrap_or_else(|| RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 0])))
+    }
+}
+
+pub fn resolve_favicon_url(page_url: &str, icon_hint: &str) -> Option<String> {
+    let hint = icon_hint.trim();
+    let hint = hint.trim_matches('"');
+
+    let icon_url = if !hint.is_empty() && hint != "null" && hint != "undefined" {
+        if let Ok(url) = Url::parse(hint) {
+            Some(url)
+        } else if let Ok(base) = Url::parse(page_url) {
+            base.join(hint).ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(url) = icon_url {
+        if url.scheme() != "data" {
+            return Some(url.to_string());
+        }
+    }
+
+    let base = Url::parse(page_url).ok()?;
+    base.join("/favicon.ico").ok().map(|url| url.to_string())
+}
+
+pub fn fetch_favicon(url: &str) -> Option<FaviconImage> {
+    if url.starts_with("data:") {
+        return None;
+    }
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout_read(READ_TIMEOUT)
+        .timeout_write(WRITE_TIMEOUT)
+        .build();
+
+    let response = agent.get(url).call().ok()?;
+    if response.status() >= 400 {
+        return None;
+    }
+
+    let mut bytes = Vec::new();
+    let mut reader = response.into_reader().take((MAX_FAVICON_BYTES + 1) as u64);
+    reader.read_to_end(&mut bytes).ok()?;
+    if bytes.len() > MAX_FAVICON_BYTES {
+        return None;
+    }
+
+    FaviconImage::from_bytes(&bytes)
+}
+
+fn resize_to_square(image: &RgbaImage, size: u32) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 || size == 0 {
+        return RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 0]));
+    }
+
+    let scale = (size as f32 / width as f32).min(size as f32 / height as f32);
+    let new_width = (width as f32 * scale).round().max(1.0) as u32;
+    let new_height = (height as f32 * scale).round().max(1.0) as u32;
+    let resized = imageops::resize(image, new_width, new_height, FilterType::Triangle);
+
+    if new_width == size && new_height == size {
+        return resized;
+    }
+
+    let mut square = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 0]));
+    let x = (size - new_width) / 2;
+    let y = (size - new_height) / 2;
+    imageops::overlay(&mut square, &resized, x.into(), y.into());
+    square
+}
+
+fn premultiply_rgba(buffer: &mut [u8]) {
+    for chunk in buffer.chunks_exact_mut(4) {
+        let alpha = chunk[3] as u16;
+        if alpha == 255 {
+            continue;
+        }
+        let r = (u16::from(chunk[0]) * alpha + 127) / 255;
+        let g = (u16::from(chunk[1]) * alpha + 127) / 255;
+        let b = (u16::from(chunk[2]) * alpha + 127) / 255;
+        chunk[0] = r as u8;
+        chunk[1] = g as u8;
+        chunk[2] = b as u8;
+    }
+}

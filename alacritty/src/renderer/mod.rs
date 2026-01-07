@@ -229,6 +229,30 @@ impl Renderer {
         self.draw_cells(size_info, glyph_cache, cells);
     }
 
+    /// Update text projection without changing the viewport.
+    pub fn set_text_projection(&mut self, size_info: &SizeInfo) {
+        match &mut self.text_renderer {
+            TextRendererProvider::Gles2(renderer) => renderer.resize(size_info),
+            TextRendererProvider::Glsl3(renderer) => renderer.resize(size_info),
+        }
+    }
+
+    /// Update text projection with a pixel offset without changing the viewport.
+    pub fn set_text_projection_with_offset(
+        &mut self,
+        size_info: &SizeInfo,
+        offset: (f32, f32),
+    ) {
+        match &mut self.text_renderer {
+            TextRendererProvider::Gles2(renderer) => {
+                renderer.set_projection_with_offset(size_info, offset)
+            },
+            TextRendererProvider::Glsl3(renderer) => {
+                renderer.set_projection_with_offset(size_info, offset)
+            },
+        }
+    }
+
     pub fn with_loader<F, T>(&mut self, func: F) -> T
     where
         F: FnOnce(LoaderApi<'_>) -> T,

@@ -48,6 +48,7 @@ mod scheduler;
 mod string;
 mod tab_panel;
 mod tabs;
+mod web_url;
 mod window_kind;
 mod window_context;
 

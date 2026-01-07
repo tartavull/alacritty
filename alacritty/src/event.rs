@@ -26,6 +26,7 @@ use glutin::config::Config as GlutinConfig;
 use glutin::display::GetGlDisplay;
 use log::{debug, error, info, warn};
 use winit::application::ApplicationHandler;
+use winit::dpi::PhysicalPosition;
 use winit::event::{
     ElementState, Event as WinitEvent, Ime, KeyEvent, Modifiers, MouseButton, StartCause,
     Touch as TouchEvent, WindowEvent,
@@ -34,7 +35,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop, E
 #[cfg(target_os = "macos")]
 use winit::platform::macos::ActiveEventLoopExtMacOS;
 use winit::raw_window_handle::HasDisplayHandle;
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
+#[cfg(target_os = "macos")]
+use winit::window::CursorIcon;
 use winit::window::WindowId;
 
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
@@ -66,9 +69,19 @@ use crate::ipc::{self, SocketReply};
 use crate::logging::{LOG_TARGET_CONFIG, LOG_TARGET_WINIT};
 use crate::message_bar::{Message, MessageBuffer};
 use crate::scheduler::{Scheduler, TimerId, Topic};
+use crate::tab_panel::TAB_ACTIVITY_TICK_INTERVAL;
 use crate::tabs::{TabCommand, TabId};
+use crate::web_url::normalize_web_url;
 use crate::window_kind::WindowKind;
 use crate::window_context::WindowContext;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSEventModifierFlags;
+#[cfg(target_os = "macos")]
+use crate::macos::web_commands::{self, WebActions, WebCommandState, WebHintAction, WebKey};
+#[cfg(target_os = "macos")]
+use crate::macos::web_cursor::{web_cursor_from_css, web_cursor_script};
+#[cfg(target_os = "macos")]
+use crate::macos::favicon::FaviconImage;
 #[cfg(target_os = "macos")]
 use crate::macos::webview::WebView;
 #[cfg(target_os = "macos")]
@@ -81,10 +94,7 @@ pub const TYPING_SEARCH_DELAY: Duration = Duration::from_millis(500);
 const FOREGROUND_PROCESS_REFRESH: Duration = Duration::from_millis(500);
 
 #[cfg(target_os = "macos")]
-const WEB_SCROLL_STEP: f64 = 48.0;
-
-#[cfg(target_os = "macos")]
-const WEB_HINTS_BOOTSTRAP: &str = r#"
+const WEB_HINTS_BOOTSTRAP: &str = r##"
 (function() {
   if (window.__alacrittyHints) {
     return;
@@ -176,7 +186,7 @@ const WEB_HINTS_BOOTSTRAP: &str = r#"
   }
   window.__alacrittyHints = { start: start, update: update, cancel: cancel };
 })();
-"#;
+"##;
 
 #[cfg(target_os = "macos")]
 const WEB_HELP_HTML: &str = r#"<pre style="margin:0;font-family:Menlo,Monaco,monospace;font-size:12px;line-height:1.4;">
@@ -341,6 +351,16 @@ impl Processor {
         let window_id = window_context.id();
         self.windows.insert(window_id, window_context);
         Ok(())
+    }
+
+    fn ensure_tab_activity_tick(&mut self, window_id: WindowId) {
+        let timer_id = TimerId::new(Topic::TabActivityTick, window_id);
+        if self.scheduler.scheduled(timer_id) {
+            return;
+        }
+
+        let event = Event::new(EventType::TabActivityTick, window_id);
+        self.scheduler.schedule(event, TAB_ACTIVITY_TICK_INTERVAL, true, timer_id);
     }
 
     /// Run the event loop.
@@ -612,12 +632,23 @@ impl ApplicationHandler<Event> for Processor {
                 }
             },
             (EventType::Terminal(TerminalEvent::Wakeup), Some(window_id)) => {
+                let mut schedule_tick = false;
                 if let Some(window_context) = self.windows.get_mut(&window_id) {
                     let is_web = tab_id
                         .and_then(|id| window_context.tab_kind(id))
                         .is_some_and(WindowKind::is_web);
                     let is_active =
                         tab_id.is_some_and(|id| Some(id) == window_context.active_tab_id());
+                    if !is_web {
+                        if let Some(tab_id) = tab_id {
+                            window_context.note_terminal_output(tab_id, is_active);
+                        }
+                        if window_context.tab_panel_enabled()
+                            && window_context.has_active_terminal_output(Instant::now())
+                        {
+                            schedule_tick = true;
+                        }
+                    }
                     if !is_web && (tab_id.is_none() || is_active) {
                         window_context.dirty = true;
                         if window_context.display.window.has_frame {
@@ -643,6 +674,9 @@ impl ApplicationHandler<Event> for Processor {
                             }
                         }
                     }
+                }
+                if schedule_tick {
+                    self.ensure_tab_activity_tick(window_id);
                 }
             },
             (EventType::Terminal(TerminalEvent::Exit | TerminalEvent::ChildExit(_)), Some(window_id)) => {
@@ -683,6 +717,26 @@ impl ApplicationHandler<Event> for Processor {
 
                         event_loop.exit();
                     }
+                }
+            },
+            (EventType::TabActivityTick, Some(window_id)) => {
+                let Some(window_context) = self.windows.get_mut(&window_id) else {
+                    return;
+                };
+
+                let timer_id = TimerId::new(Topic::TabActivityTick, window_id);
+                if !window_context.tab_panel_enabled() {
+                    self.scheduler.unschedule(timer_id);
+                    return;
+                }
+
+                if !window_context.has_active_terminal_output(Instant::now()) {
+                    self.scheduler.unschedule(timer_id);
+                }
+
+                window_context.dirty = true;
+                if window_context.display.window.has_frame {
+                    window_context.display.window.request_redraw();
                 }
             },
             // NOTE: This event bypasses batching to minimize input latency.
@@ -829,6 +883,10 @@ pub enum EventType {
     #[cfg(target_os = "macos")]
     WebCommand(WebCommand),
     #[cfg(target_os = "macos")]
+    WebFavicon { page_url: String, icon: Option<FaviconImage> },
+    #[cfg(target_os = "macos")]
+    WebCursor { cursor: Option<CursorIcon> },
+    #[cfg(target_os = "macos")]
     CloseTab(TabId),
     #[cfg(target_os = "macos")]
     RestoreTab,
@@ -840,6 +898,7 @@ pub enum EventType {
     IpcGetConfig(Arc<UnixStream>),
     BlinkCursor,
     BlinkCursorTimeout,
+    TabActivityTick,
     SearchNext,
     UpdateTabProgramName,
     Frame,
@@ -960,7 +1019,7 @@ impl CommandState {
         self.completion = None;
     }
 
-    fn start_with_input(&mut self, prompt: char, input: &str) {
+    pub(crate) fn start_with_input(&mut self, prompt: char, input: &str) {
         self.start_with(prompt);
         self.input.push_str(input);
     }
@@ -1002,7 +1061,7 @@ pub struct CommandHistory {
 }
 
 impl CommandHistory {
-    fn record_url(&mut self, url: String) {
+    pub(crate) fn record_url(&mut self, url: String) {
         if url.is_empty() {
             return;
         }
@@ -1050,121 +1109,6 @@ impl CommandHistory {
 impl Default for CommandHistory {
     fn default() -> Self {
         Self { urls: Vec::new() }
-    }
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WebMode {
-    Normal,
-    Insert,
-    Visual,
-    VisualLine,
-    Hint,
-    MarkSet,
-    MarkJump,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WebHintAction {
-    Open,
-    OpenNewTab,
-    CopyLink,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Debug)]
-struct WebHintState {
-    action: WebHintAction,
-    keys: String,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Default)]
-struct WebPending {
-    g: bool,
-    z: bool,
-    y: bool,
-    bracket: Option<char>,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Debug)]
-struct WebMark {
-    url: String,
-    scroll_x: f64,
-    scroll_y: f64,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Debug)]
-struct WebPendingScroll {
-    url: String,
-    scroll_x: f64,
-    scroll_y: f64,
-}
-
-#[cfg(target_os = "macos")]
-pub struct WebCommandState {
-    mode: WebMode,
-    pending: WebPending,
-    hint: Option<WebHintState>,
-    last_find: Option<String>,
-    last_find_backward: bool,
-    marks: HashMap<char, WebMark>,
-    pending_scroll: Option<WebPendingScroll>,
-    help_visible: bool,
-}
-
-#[cfg(target_os = "macos")]
-impl WebCommandState {
-    fn reset_pending(&mut self) {
-        self.pending = WebPending::default();
-    }
-
-    fn set_mode(&mut self, mode: WebMode) {
-        self.mode = mode;
-        if mode != WebMode::Hint {
-            self.hint = None;
-        }
-        if !matches!(mode, WebMode::Hint | WebMode::MarkSet | WebMode::MarkJump) {
-            self.reset_pending();
-        }
-    }
-
-    pub(crate) fn reset_mode(&mut self) {
-        self.set_mode(WebMode::Normal);
-    }
-
-    fn set_mark(&mut self, name: char, url: String, scroll_x: f64, scroll_y: f64) {
-        self.marks.insert(name, WebMark { url, scroll_x, scroll_y });
-    }
-
-    fn take_pending_scroll(&mut self, url: &str) -> Option<(f64, f64)> {
-        let pending = self.pending_scroll.take()?;
-        if pending.url == url {
-            Some((pending.scroll_x, pending.scroll_y))
-        } else {
-            self.pending_scroll = Some(pending);
-            None
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Default for WebCommandState {
-    fn default() -> Self {
-        Self {
-            mode: WebMode::Normal,
-            pending: WebPending::default(),
-            hint: None,
-            last_find: None,
-            last_find_backward: false,
-            marks: HashMap::default(),
-            pending_scroll: None,
-            help_visible: false,
-        }
     }
 }
 
@@ -1327,19 +1271,19 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         self.terminal.selection = Some(Selection::new(ty, point, side));
         *self.dirty = true;
 
-        self.copy_selection(ClipboardType::Selection);
+        input::ActionContext::copy_selection(self, ClipboardType::Selection);
     }
 
     fn toggle_selection(&mut self, ty: SelectionType, point: Point, side: Side) {
         match &mut self.terminal.selection {
             Some(selection) if selection.ty == ty && !selection.is_empty() => {
-                self.clear_selection();
+                input::ActionContext::clear_selection(self);
             },
             Some(selection) if !selection.is_empty() => {
                 selection.ty = ty;
                 *self.dirty = true;
 
-                self.copy_selection(ClipboardType::Selection);
+                input::ActionContext::copy_selection(self, ClipboardType::Selection);
             },
             _ => self.start_selection(ty, point, side),
         }
@@ -1394,6 +1338,52 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     #[inline]
     fn window_kind(&self) -> &WindowKind {
         self.tab_kind
+    }
+
+    #[cfg(target_os = "macos")]
+    fn web_request_cursor_update(&mut self, position: PhysicalPosition<f64>) {
+        if !self.tab_kind.is_web() {
+            return;
+        }
+
+        let Some(web_view) = self.web_view.as_mut() else {
+            return;
+        };
+
+        self.web_command_state.set_last_cursor_pos(position);
+
+        if self.web_command_state.cursor_pending() {
+            return;
+        }
+
+        let scale_factor = self.display.window.scale_factor as f64;
+        let size_info = self.display.size_info;
+        let origin_x = f64::from(size_info.padding_x()) / scale_factor;
+        let origin_y = f64::from(size_info.padding_y()) / scale_factor;
+        let width = f64::from(size_info.width() - size_info.padding_x() - size_info.padding_right())
+            / scale_factor;
+        let height =
+            f64::from(size_info.cell_height() * size_info.screen_lines() as f32) / scale_factor;
+
+        let local_x = position.x / scale_factor - origin_x;
+        let local_y = position.y / scale_factor - origin_y;
+
+        if local_x < 0.0 || local_y < 0.0 || local_x >= width || local_y >= height {
+            return;
+        }
+
+        self.web_command_state.set_cursor_pending(true);
+
+        let window_id = self.display.window.id();
+        let tab_id = self.tab_id;
+        let proxy = self.event_proxy.clone();
+        let script = web_cursor_script(local_x, local_y);
+
+        web_view.eval_js_string(&script, move |result| {
+            let cursor = result.as_deref().and_then(web_cursor_from_css);
+            let event = Event::for_tab(EventType::WebCursor { cursor }, window_id, tab_id);
+            let _ = proxy.send_event(event);
+        });
     }
 
     fn spawn_new_instance(&mut self) {
@@ -1563,7 +1553,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         let origin = self.terminal.vi_mode_cursor.point;
 
         // Start new search.
-        self.clear_selection();
+        input::ActionContext::clear_selection(self);
         self.start_search(direction);
 
         // Enter initial selection text.
@@ -1632,7 +1622,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             let end = *focused_match.end();
             self.start_selection(SelectionType::Simple, start, Side::Left);
             self.update_selection(end, Side::Right);
-            self.copy_selection(ClipboardType::Selection);
+            input::ActionContext::copy_selection(self, ClipboardType::Selection);
         }
 
         self.search_state.dfas = None;
@@ -1780,6 +1770,23 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         } else {
             if self.search_active() {
                 self.cancel_search();
+            }
+            #[cfg(target_os = "macos")]
+            if self.tab_kind.is_web() {
+                let url = normalize_web_url("chat.com");
+                let mut options = WindowOptions::default();
+                options.window_kind = WindowKind::Web { url: url.clone() };
+                options.command_input = Some(String::from("o "));
+                #[cfg(not(windows))]
+                {
+                    options.terminal_options.working_directory =
+                        foreground_process_path(self.master_fd, self.shell_pid).ok();
+                }
+
+                let event = Event::new(EventType::CreateTab(options), self.display.window.id());
+                self.command_history.record_url(url);
+                let _ = self.event_proxy.send_event(event);
+                return;
             }
             self.command_state.start();
         }
@@ -1970,7 +1977,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             HintAction::Action(HintInternalAction::Select) => {
                 self.start_selection(SelectionType::Simple, *hint_bounds.start(), Side::Left);
                 self.update_selection(*hint_bounds.end(), Side::Right);
-                self.copy_selection(ClipboardType::Selection);
+                input::ActionContext::copy_selection(self, ClipboardType::Selection);
             },
             // Move the vi mode cursor.
             HintAction::Action(HintInternalAction::MoveViModeCursor) => {
@@ -2069,7 +2076,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     /// Handle beginning of terminal text input.
     fn on_terminal_input_start(&mut self) {
         self.on_typing_start();
-        self.clear_selection();
+        input::ActionContext::clear_selection(self);
 
         if self.terminal().grid().display_offset() != 0 {
             self.scroll(Scroll::Bottom);
@@ -2142,7 +2149,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 self.display.damage_tracker.frame().mark_fully_damaged();
             }
         } else {
-            self.clear_selection();
+            input::ActionContext::clear_selection(self);
         }
 
         if self.search_active() {
@@ -2198,267 +2205,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         self.inline_search_next();
     }
 
-    #[cfg(target_os = "macos")]
-    fn handle_web_key(&mut self, key: &KeyEvent, text: &str) -> bool {
-        if self.web_view.is_none() {
-            return false;
-        }
-
-        if let Key::Named(NamedKey::Escape) = key.logical_key.as_ref() {
-            self.web_escape();
-            return true;
-        }
-
-        match self.web_command_state.mode {
-            WebMode::Insert => return self.web_handle_insert(key, text),
-            WebMode::Hint => return self.web_handle_hint(key, text),
-            WebMode::MarkSet => return self.web_handle_mark_set(text),
-            WebMode::MarkJump => return self.web_handle_mark_jump(text),
-            WebMode::Visual | WebMode::VisualLine => return self.web_handle_visual(key, text),
-            WebMode::Normal => (),
-        }
-
-        let mut chars = text.chars();
-        let Some(mut ch) = chars.next() else {
-            return false;
-        };
-        if chars.next().is_some() {
-            return false;
-        }
-
-        let mut retry = true;
-        while retry {
-            retry = false;
-
-            if let Some(bracket) = self.web_command_state.pending.bracket {
-                self.web_command_state.pending.bracket = None;
-                if bracket == ch {
-                    match bracket {
-                        '[' => {
-                            self.web_follow_rel("prev");
-                            return true;
-                        },
-                        ']' => {
-                            self.web_follow_rel("next");
-                            return true;
-                        },
-                        _ => (),
-                    }
-                } else {
-                    retry = true;
-                    continue;
-                }
-            }
-
-            if self.web_command_state.pending.g {
-                self.web_command_state.pending.g = false;
-                match ch {
-                    'g' => {
-                        self.web_scroll_top();
-                        return true;
-                    },
-                    '0' => {
-                        self.select_tab_at_index(0);
-                        return true;
-                    },
-                    '$' => {
-                        self.select_last_tab();
-                        return true;
-                    },
-                    'u' => {
-                        self.web_up_url(false);
-                        return true;
-                    },
-                    'U' => {
-                        self.web_up_url(true);
-                        return true;
-                    },
-                    's' => {
-                        self.web_view_source();
-                        return true;
-                    },
-                    'i' => {
-                        self.web_focus_input();
-                        return true;
-                    },
-                    _ => {
-                        retry = true;
-                        continue;
-                    },
-                }
-            }
-
-            if self.web_command_state.pending.z {
-                self.web_command_state.pending.z = false;
-                match ch {
-                    'H' | 'h' => {
-                        self.web_scroll_far_left();
-                        return true;
-                    },
-                    'L' | 'l' => {
-                        self.web_scroll_far_right();
-                        return true;
-                    },
-                    _ => {
-                        retry = true;
-                        continue;
-                    },
-                }
-            }
-
-            if self.web_command_state.pending.y {
-                self.web_command_state.pending.y = false;
-                match ch {
-                    'y' => {
-                        self.web_copy_url();
-                        return true;
-                    },
-                    'f' => {
-                        self.web_start_hints(WebHintAction::CopyLink);
-                        return true;
-                    },
-                    _ => {
-                        retry = true;
-                        continue;
-                    },
-                }
-            }
-        }
-
-        match ch {
-            'j' => self.web_scroll_by(0.0, WEB_SCROLL_STEP),
-            'k' => self.web_scroll_by(0.0, -WEB_SCROLL_STEP),
-            'h' => self.web_scroll_by(-WEB_SCROLL_STEP, 0.0),
-            'l' => self.web_scroll_by(WEB_SCROLL_STEP, 0.0),
-            'd' => self.web_scroll_half_page(true),
-            'u' => self.web_scroll_half_page(false),
-            'G' => self.web_scroll_bottom(),
-            'g' => {
-                self.web_command_state.pending.g = true;
-                return true;
-            },
-            'z' => {
-                self.web_command_state.pending.z = true;
-                return true;
-            },
-            '[' => {
-                self.web_command_state.pending.bracket = Some('[');
-                return true;
-            },
-            ']' => {
-                self.web_command_state.pending.bracket = Some(']');
-                return true;
-            },
-            'f' => {
-                self.web_start_hints(WebHintAction::Open);
-                return true;
-            },
-            'F' => {
-                self.web_start_hints(WebHintAction::OpenNewTab);
-                return true;
-            },
-            'y' => {
-                self.web_command_state.pending.y = true;
-                return true;
-            },
-            'H' => {
-                self.web_go_back();
-                return true;
-            },
-            'L' => {
-                self.web_go_forward();
-                return true;
-            },
-            '/' => {
-                self.web_start_find();
-                return true;
-            },
-            'n' => {
-                self.web_find_next(false);
-                return true;
-            },
-            'N' => {
-                self.web_find_next(true);
-                return true;
-            },
-            'v' => {
-                self.web_toggle_visual(false);
-                return true;
-            },
-            'V' => {
-                self.web_toggle_visual(true);
-                return true;
-            },
-            'p' => {
-                self.web_open_clipboard(false);
-                return true;
-            },
-            'P' => {
-                self.web_open_clipboard(true);
-                return true;
-            },
-            't' => {
-                self.web_new_tab();
-                return true;
-            },
-            'x' => {
-                self.web_close_tab();
-                return true;
-            },
-            'X' => {
-                self.web_restore_tab();
-                return true;
-            },
-            'J' => {
-                self.select_previous_tab();
-                return true;
-            },
-            'K' => {
-                self.select_next_tab();
-                return true;
-            },
-            'o' => {
-                self.web_open_command_bar("o ");
-                return true;
-            },
-            'O' => {
-                self.web_open_command_bar("O ");
-                return true;
-            },
-            'b' => {
-                self.web_open_command_bar("b ");
-                return true;
-            },
-            'B' => {
-                self.web_open_command_bar("B ");
-                return true;
-            },
-            'T' => {
-                self.web_open_command_bar("T ");
-                return true;
-            },
-            'r' => {
-                self.reload_web();
-                return true;
-            },
-            'm' => {
-                self.web_command_state.set_mode(WebMode::MarkSet);
-                return true;
-            },
-            '`' => {
-                self.web_command_state.set_mode(WebMode::MarkJump);
-                return true;
-            },
-            '?' => {
-                self.web_toggle_help();
-                return true;
-            },
-            _ => (),
-        }
-
-        true
-    }
-
     fn message(&self) -> Option<&Message> {
         self.message_buffer.message()
     }
@@ -2482,11 +2228,92 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     #[cfg(target_os = "macos")]
     fn web_handle_key(&mut self, key: &KeyEvent, text: &str) -> bool {
-        self.handle_web_key(key, text)
+        if self.web_view.is_none() {
+            return false;
+        }
+
+        let web_key = web_key_from_event(key);
+        self.with_web_command_state(|state, ctx| {
+            let before = state.status_label();
+            let handled = web_commands::handle_key(state, ctx, web_key, text);
+            if handled && before != state.status_label() {
+                ctx.mark_dirty();
+            }
+            handled
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn web_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if !self.tab_kind.is_web() {
+            return;
+        }
+
+        let Some(position) = self.web_command_state.last_cursor_pos() else {
+            return;
+        };
+
+        let modifiers = web_modifier_flags(self.modifiers().state());
+        let Some(web_view) = self.web_view.as_mut() else {
+            return;
+        };
+        web_view.handle_mouse_input(
+            &self.display.window,
+            &self.display.size_info,
+            position,
+            state,
+            button,
+            modifiers,
+        );
     }
 }
 
+#[cfg(target_os = "macos")]
+fn web_key_from_event(key: &KeyEvent) -> WebKey {
+    match key.logical_key.as_ref() {
+        Key::Named(NamedKey::Escape) => WebKey::Escape,
+        Key::Named(NamedKey::Enter) => WebKey::Enter,
+        Key::Named(NamedKey::Backspace) => WebKey::Backspace,
+        Key::Named(NamedKey::Delete) => WebKey::Delete,
+        Key::Named(NamedKey::Tab) => WebKey::Tab,
+        Key::Named(NamedKey::ArrowLeft) => WebKey::ArrowLeft,
+        Key::Named(NamedKey::ArrowRight) => WebKey::ArrowRight,
+        Key::Named(NamedKey::ArrowUp) => WebKey::ArrowUp,
+        Key::Named(NamedKey::ArrowDown) => WebKey::ArrowDown,
+        _ => WebKey::Other,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn web_modifier_flags(mods: ModifiersState) -> NSEventModifierFlags {
+    let mut flags = NSEventModifierFlags::empty();
+    if mods.shift_key() {
+        flags.insert(NSEventModifierFlags::Shift);
+    }
+    if mods.control_key() {
+        flags.insert(NSEventModifierFlags::Control);
+    }
+    if mods.alt_key() {
+        flags.insert(NSEventModifierFlags::Option);
+    }
+    if mods.super_key() {
+        flags.insert(NSEventModifierFlags::Command);
+    }
+    flags
+}
+
 impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
+    #[cfg(target_os = "macos")]
+    fn with_web_command_state<R>(
+        &mut self,
+        f: impl FnOnce(&mut WebCommandState, &mut Self) -> R,
+    ) -> R {
+        let state_ptr = self.web_command_state as *mut WebCommandState;
+        // SAFETY: WebCommandState is stored outside ActionContext; WebActions implementations
+        // do not access web_command_state directly, so we can split the mutable borrow here.
+        unsafe { f(&mut *state_ptr, self) }
+    }
+
     fn update_search(&mut self) {
         let regex = match self.search_state.regex() {
             Some(regex) => regex,
@@ -2699,11 +2526,13 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
                 return;
             }
 
-            #[cfg(target_os = "macos")]
-            if self.tab_kind.is_web() {
-                self.web_find(query, false);
-                return;
-            }
+        #[cfg(target_os = "macos")]
+        if self.tab_kind.is_web() {
+            self.with_web_command_state(|state, ctx| {
+                web_commands::find(state, ctx, query, false);
+            });
+            return;
+        }
 
             self.push_command_error(String::from("Find is only available in web tabs"));
             return;
@@ -2845,15 +2674,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         serde_json::to_string(value).unwrap_or_else(|_| String::from("\"\""))
     }
 
-    fn single_char(text: &str) -> Option<char> {
-        let mut chars = text.chars();
-        let ch = chars.next()?;
-        if chars.next().is_some() {
-            return None;
-        }
-        Some(ch)
-    }
-
     fn start_command_prompt(&mut self, prompt: char, input: &str) {
         if self.command_state.is_active() {
             self.command_state.cancel();
@@ -2896,129 +2716,22 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         }
     }
 
-    fn web_escape(&mut self) {
-        if self.web_command_state.help_visible {
-            self.web_hide_help();
-            self.web_command_state.help_visible = false;
-            return;
-        }
-
-        match self.web_command_state.mode {
-            WebMode::Hint => {
-                self.web_exec_js(
-                    "if (window.__alacrittyHints) { window.__alacrittyHints.cancel(); }",
-                );
-            },
-            WebMode::Visual | WebMode::VisualLine => {
-                self.web_exec_js("window.getSelection().removeAllRanges();");
-            },
-            WebMode::Insert => {
-                self.web_exec_js("if (document.activeElement) { document.activeElement.blur(); }");
-            },
-            WebMode::Normal | WebMode::MarkSet | WebMode::MarkJump => (),
-        }
-
-        self.web_command_state.set_mode(WebMode::Normal);
+    fn web_clear_selection(&mut self) {
+        self.web_exec_js("window.getSelection().removeAllRanges();");
     }
 
-    fn web_handle_insert(&mut self, key: &KeyEvent, text: &str) -> bool {
-        match key.logical_key.as_ref() {
-            Key::Named(NamedKey::Escape) => {
-                self.web_escape();
-                return true;
-            },
-            Key::Named(NamedKey::Backspace) => {
-                self.web_exec_js("document.execCommand('deleteBackward');");
-                return true;
-            },
-            Key::Named(NamedKey::Delete) => {
-                self.web_exec_js("document.execCommand('deleteForward');");
-                return true;
-            },
-            Key::Named(NamedKey::Enter) => {
-                self.web_exec_js("document.execCommand('insertParagraph');");
-                return true;
-            },
-            Key::Named(NamedKey::Tab) => {
-                let script =
-                    format!("document.execCommand('insertText', false, {});", Self::js_string("\t"));
-                self.web_exec_js(&script);
-                return true;
-            },
-            Key::Named(NamedKey::ArrowLeft) => {
-                self.web_caret_move("backward", "character");
-                return true;
-            },
-            Key::Named(NamedKey::ArrowRight) => {
-                self.web_caret_move("forward", "character");
-                return true;
-            },
-            Key::Named(NamedKey::ArrowUp) => {
-                self.web_caret_move("backward", "line");
-                return true;
-            },
-            Key::Named(NamedKey::ArrowDown) => {
-                self.web_caret_move("forward", "line");
-                return true;
-            },
-            _ => (),
-        }
-
-        if !text.is_empty() {
-            let script =
-                format!("document.execCommand('insertText', false, {});", Self::js_string(text));
-            self.web_exec_js(&script);
-        }
-
-        true
+    fn web_blur_active_element(&mut self) {
+        self.web_exec_js("if (document.activeElement) { document.activeElement.blur(); }");
     }
 
-    fn web_handle_hint(&mut self, key: &KeyEvent, text: &str) -> bool {
-        let Some(hint) = self.web_command_state.hint.as_mut() else {
-            self.web_command_state.set_mode(WebMode::Normal);
-            return true;
-        };
-
-        match key.logical_key.as_ref() {
-            Key::Named(NamedKey::Escape) => {
-                self.web_exec_js(
-                    "if (window.__alacrittyHints) { window.__alacrittyHints.cancel(); }",
-                );
-                self.web_command_state.set_mode(WebMode::Normal);
-                return true;
-            },
-            Key::Named(NamedKey::Backspace) => {
-                hint.keys.pop();
-                drop(hint);
-                self.web_hint_update();
-                return true;
-            },
-            Key::Named(NamedKey::Enter) => {
-                drop(hint);
-                self.web_hint_update();
-                return true;
-            },
-            _ => (),
-        }
-
-        let Some(ch) = Self::single_char(text) else {
-            return true;
-        };
-        hint.keys.push(ch.to_ascii_lowercase());
-        drop(hint);
-        self.web_hint_update();
-        true
+    fn web_hints_start(&mut self, _action: WebHintAction) {
+        self.web_exec_js(&format!("{WEB_HINTS_BOOTSTRAP}\nwindow.__alacrittyHints.start();"));
     }
 
-    fn web_hint_update(&mut self) {
-        let (keys, action) = match &self.web_command_state.hint {
-            Some(hint) => (hint.keys.clone(), hint.action),
-            None => return,
-        };
-
+    fn web_hints_update(&mut self, keys: &str, action: WebHintAction) {
         let script = format!(
             "{WEB_HINTS_BOOTSTRAP}\nwindow.__alacrittyHints.update({});",
-            Self::js_string(&keys)
+            Self::js_string(keys)
         );
         let proxy = self.event_proxy.clone();
         let window_id = self.display.window.id();
@@ -3040,28 +2753,15 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         });
     }
 
-    fn web_start_hints(&mut self, action: WebHintAction) {
-        self.web_command_state.set_mode(WebMode::Hint);
-        self.web_command_state.hint = Some(WebHintState { action, keys: String::new() });
-        self.web_exec_js(&format!("{WEB_HINTS_BOOTSTRAP}\nwindow.__alacrittyHints.start();"));
+    fn web_hints_cancel(&mut self) {
+        self.web_exec_js("if (window.__alacrittyHints) { window.__alacrittyHints.cancel(); }");
     }
 
-    fn web_handle_mark_set(&mut self, text: &str) -> bool {
-        let Some(name) = Self::single_char(text) else {
-            return true;
-        };
-        self.web_command_state.set_mode(WebMode::Normal);
-
-        let Some(url) = self.current_web_url() else {
-            self.push_command_error(String::from("No active URL for mark"));
-            return true;
-        };
-
+    fn web_request_mark_set(&mut self, name: char, url: String) {
         let script = "JSON.stringify({x: window.scrollX, y: window.scrollY})";
         let proxy = self.event_proxy.clone();
         let window_id = self.display.window.id();
         let tab_id = self.tab_id;
-        let url = url.clone();
 
         self.web_eval_js_string(script, move |result| {
             let Some(result) = result else {
@@ -3073,89 +2773,10 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
             };
             let scroll_x = value.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let scroll_y = value.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let command = WebCommand::SetMark {
-                name,
-                url: url.clone(),
-                scroll_x,
-                scroll_y,
-            };
+            let command = WebCommand::SetMark { name, url, scroll_x, scroll_y };
             let event = Event::for_tab(EventType::WebCommand(command), window_id, tab_id);
             let _ = proxy.send_event(event);
         });
-        true
-    }
-
-    fn web_handle_mark_jump(&mut self, text: &str) -> bool {
-        let Some(name) = Self::single_char(text) else {
-            return true;
-        };
-        self.web_command_state.set_mode(WebMode::Normal);
-
-        let Some(mark) = self.web_command_state.marks.get(&name).cloned() else {
-            self.push_command_error(format!("Unknown mark: {name}"));
-            return true;
-        };
-
-        if self.current_web_url().as_deref() == Some(mark.url.as_str()) {
-            self.web_scroll_to(mark.scroll_x, mark.scroll_y);
-        } else {
-            self.web_command_state.pending_scroll = Some(WebPendingScroll {
-                url: mark.url.clone(),
-                scroll_x: mark.scroll_x,
-                scroll_y: mark.scroll_y,
-            });
-            self.open_web_url(mark.url);
-        }
-
-        true
-    }
-
-    fn web_handle_visual(&mut self, _key: &KeyEvent, text: &str) -> bool {
-        let Some(ch) = Self::single_char(text) else {
-            return true;
-        };
-
-        match ch {
-            'y' => {
-                self.web_copy_selection();
-                self.web_exec_js("window.getSelection().removeAllRanges();");
-                self.web_command_state.set_mode(WebMode::Normal);
-                return true;
-            },
-            'v' => {
-                self.web_toggle_visual(false);
-                return true;
-            },
-            'V' => {
-                self.web_toggle_visual(true);
-                return true;
-            },
-            _ => (),
-        }
-
-        let line_mode = matches!(self.web_command_state.mode, WebMode::VisualLine);
-        let granularity = if line_mode { "line" } else { "character" };
-        match ch {
-            'h' => self.web_visual_move("backward", granularity),
-            'l' => self.web_visual_move("forward", granularity),
-            'k' => self.web_visual_move("backward", "line"),
-            'j' => self.web_visual_move("forward", "line"),
-            _ => (),
-        }
-
-        true
-    }
-
-    fn web_toggle_visual(&mut self, line_mode: bool) {
-        let target = if line_mode { WebMode::VisualLine } else { WebMode::Visual };
-        if self.web_command_state.mode == target {
-            self.web_exec_js("window.getSelection().removeAllRanges();");
-            self.web_command_state.set_mode(WebMode::Normal);
-            return;
-        }
-
-        self.web_command_state.set_mode(target);
-        self.web_start_visual_selection();
     }
 
     fn web_start_visual_selection(&mut self) {
@@ -3280,16 +2901,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
             if backwards { "true" } else { "false" }
         );
         self.web_exec_js(&script);
-        self.web_command_state.last_find = Some(query.to_string());
-        self.web_command_state.last_find_backward = backwards;
-    }
-
-    fn web_find_next(&mut self, backwards: bool) {
-        let Some(query) = self.web_command_state.last_find.clone() else {
-            self.push_command_error(String::from("No active search"));
-            return;
-        };
-        self.web_find(&query, backwards);
     }
 
     fn web_focus_input(&mut self) {
@@ -3301,7 +2912,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
   }
 })();"#;
         self.web_exec_js(script);
-        self.web_command_state.set_mode(WebMode::Insert);
     }
 
     fn web_view_source(&mut self) {
@@ -3378,16 +2988,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         let _ = self.event_proxy.send_event(event);
     }
 
-    fn web_toggle_help(&mut self) {
-        if self.web_command_state.help_visible {
-            self.web_hide_help();
-            self.web_command_state.help_visible = false;
-        } else {
-            self.web_show_help();
-            self.web_command_state.help_visible = true;
-        }
-    }
-
     fn web_show_help(&mut self) {
         let html = Self::js_string(WEB_HELP_HTML);
         let script = format!(
@@ -3460,21 +3060,195 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
     }
 }
 
-fn normalize_web_url(input: &str) -> String {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return String::new();
+#[cfg(target_os = "macos")]
+impl<'a, N: Notify + 'a, T: EventListener> WebActions for ActionContext<'a, N, T> {
+    fn scroll_by(&mut self, dx: f64, dy: f64) {
+        self.web_scroll_by(dx, dy);
     }
 
-    if trimmed.contains("://")
-        || trimmed.starts_with("about:")
-        || trimmed.starts_with("file:")
-        || trimmed.starts_with("data:")
-    {
-        return trimmed.to_string();
+    fn scroll_half_page(&mut self, down: bool) {
+        self.web_scroll_half_page(down);
     }
 
-    format!("https://{trimmed}")
+    fn scroll_top(&mut self) {
+        self.web_scroll_top();
+    }
+
+    fn scroll_bottom(&mut self) {
+        self.web_scroll_bottom();
+    }
+
+    fn scroll_far_left(&mut self) {
+        self.web_scroll_far_left();
+    }
+
+    fn scroll_far_right(&mut self) {
+        self.web_scroll_far_right();
+    }
+
+    fn scroll_to(&mut self, x: f64, y: f64) {
+        self.web_scroll_to(x, y);
+    }
+
+    fn go_back(&mut self) {
+        self.web_go_back();
+    }
+
+    fn go_forward(&mut self) {
+        self.web_go_forward();
+    }
+
+    fn open_command_bar(&mut self, input: &str) {
+        self.web_open_command_bar(input);
+    }
+
+    fn start_find_prompt(&mut self) {
+        self.web_start_find();
+    }
+
+    fn find(&mut self, query: &str, backwards: bool) {
+        self.web_find(query, backwards);
+    }
+
+    fn hints_start(&mut self, action: WebHintAction) {
+        self.web_hints_start(action);
+    }
+
+    fn hints_update(&mut self, keys: &str, action: WebHintAction) {
+        self.web_hints_update(keys, action);
+    }
+
+    fn hints_cancel(&mut self) {
+        self.web_hints_cancel();
+    }
+
+    fn copy_selection(&mut self) {
+        self.web_copy_selection();
+    }
+
+    fn clear_selection(&mut self) {
+        self.web_clear_selection();
+    }
+
+    fn start_visual_selection(&mut self) {
+        self.web_start_visual_selection();
+    }
+
+    fn visual_move(&mut self, direction: &str, granularity: &str) {
+        self.web_visual_move(direction, granularity);
+    }
+
+    fn focus_input(&mut self) {
+        self.web_focus_input();
+    }
+
+    fn blur_active_element(&mut self) {
+        self.web_blur_active_element();
+    }
+
+    fn insert_text(&mut self, text: &str) {
+        let script =
+            format!("document.execCommand('insertText', false, {});", Self::js_string(text));
+        self.web_exec_js(&script);
+    }
+
+    fn delete_backward(&mut self) {
+        self.web_exec_js("document.execCommand('deleteBackward');");
+    }
+
+    fn delete_forward(&mut self) {
+        self.web_exec_js("document.execCommand('deleteForward');");
+    }
+
+    fn insert_paragraph(&mut self) {
+        self.web_exec_js("document.execCommand('insertParagraph');");
+    }
+
+    fn insert_tab(&mut self) {
+        let script =
+            format!("document.execCommand('insertText', false, {});", Self::js_string("\t"));
+        self.web_exec_js(&script);
+    }
+
+    fn caret_move(&mut self, direction: &str, granularity: &str) {
+        self.web_caret_move(direction, granularity);
+    }
+
+    fn view_source(&mut self) {
+        self.web_view_source();
+    }
+
+    fn follow_rel(&mut self, rel: &str) {
+        self.web_follow_rel(rel);
+    }
+
+    fn copy_url(&mut self) {
+        self.web_copy_url();
+    }
+
+    fn open_clipboard(&mut self, new_tab: bool) {
+        self.web_open_clipboard(new_tab);
+    }
+
+    fn up_url(&mut self, root: bool) {
+        self.web_up_url(root);
+    }
+
+    fn new_tab(&mut self) {
+        self.web_new_tab();
+    }
+
+    fn close_tab(&mut self) {
+        self.web_close_tab();
+    }
+
+    fn restore_tab(&mut self) {
+        self.web_restore_tab();
+    }
+
+    fn select_previous_tab(&mut self) {
+        input::ActionContext::select_previous_tab(self);
+    }
+
+    fn select_next_tab(&mut self) {
+        input::ActionContext::select_next_tab(self);
+    }
+
+    fn select_tab_at_index(&mut self, index: usize) {
+        input::ActionContext::select_tab_at_index(self, index);
+    }
+
+    fn select_last_tab(&mut self) {
+        input::ActionContext::select_last_tab(self);
+    }
+
+    fn reload(&mut self) {
+        self.reload_web();
+    }
+
+    fn show_help(&mut self) {
+        self.web_show_help();
+    }
+
+    fn hide_help(&mut self) {
+        self.web_hide_help();
+    }
+
+    fn request_mark_set(&mut self, name: char, url: String) {
+        self.web_request_mark_set(name, url);
+    }
+
+    fn current_url(&mut self) -> Option<String> {
+        self.current_web_url()
+    }
+
+    fn open_url(&mut self, url: String) {
+        self.open_web_url(url);
+    }
+
+    fn push_error(&mut self, message: String) {
+        self.push_command_error(message);
+    }
 }
 
 fn command_url_prefix(input: &str) -> Option<(usize, &str)> {
@@ -3542,6 +3316,7 @@ mod tests {
         let (second, _) = history.complete("https://", Some(first_index)).unwrap();
         assert_eq!(second, "https://example.com");
     }
+
 }
 
 /// Identified purpose of the touch input.
@@ -3772,20 +3547,28 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 },
                 #[cfg(unix)]
                 EventType::IpcConfig(_) | EventType::IpcGetConfig(..) => (),
+                #[cfg(target_os = "macos")]
                 EventType::Message(_)
                 | EventType::ConfigReload(_)
                 | EventType::CreateWindow(_)
                 | EventType::CreateTab(_)
                 | EventType::TabCommand(_)
                 | EventType::UpdateTabProgramName
-                #[cfg(target_os = "macos")]
-                | EventType::WebCommand(_)
-                #[cfg(target_os = "macos")]
+                | EventType::TabActivityTick
                 | EventType::CloseTab(_)
-                #[cfg(target_os = "macos")]
                 | EventType::RestoreTab
-                #[cfg(target_os = "macos")]
+                | EventType::WebFavicon { .. }
+                | EventType::WebCursor { .. }
                 | EventType::TabSearch(_)
+                | EventType::Frame => (),
+                #[cfg(not(target_os = "macos"))]
+                EventType::Message(_)
+                | EventType::ConfigReload(_)
+                | EventType::CreateWindow(_)
+                | EventType::CreateTab(_)
+                | EventType::TabCommand(_)
+                | EventType::UpdateTabProgramName
+                | EventType::TabActivityTick
                 | EventType::Frame => (),
             },
             WinitEvent::WindowEvent { event, .. } => {
@@ -3793,6 +3576,17 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     WindowEvent::CloseRequested => {
                         // User asked to close the window, so no need to hold it.
                         self.ctx.window().hold = false;
+                        #[cfg(target_os = "macos")]
+                        if self.ctx.window_kind().is_web() {
+                            let event = Event::new(
+                                EventType::CloseTab(self.ctx.tab_id),
+                                self.ctx.display.window.id(),
+                            );
+                            let _ = self.ctx.event_proxy.send_event(event);
+                        } else {
+                            self.ctx.terminal.exit();
+                        }
+                        #[cfg(not(target_os = "macos"))]
                         self.ctx.terminal.exit();
                     },
                     WindowEvent::ScaleFactorChanged { scale_factor, .. } => {

@@ -1,5 +1,7 @@
 //! Terminal window context.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
@@ -16,10 +18,12 @@ use glutin::display::GetGlDisplay;
 use glutin::platform::x11::X11GlConfigExt;
 use log::info;
 use serde_json as json;
-use winit::event::{Event as WinitEvent, Modifiers, WindowEvent};
+use winit::event::{Event as WinitEvent, Ime, Modifiers, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::WindowId;
+#[cfg(target_os = "macos")]
+use winit::window::CursorIcon;
 
 use alacritty_terminal::event::{Event as TerminalEvent, Notify, OnResize};
 use alacritty_terminal::event_loop::{EventLoop as PtyEventLoop, Msg, Notifier};
@@ -28,19 +32,21 @@ use alacritty_terminal::index::Direction;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Term, TermMode};
+#[cfg(target_os = "macos")]
+use alacritty_terminal::term::MIN_COLUMNS;
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::NamedColor;
 
 use crate::cli::{ParsedOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
-#[cfg(target_os = "macos")]
-use crate::daemon::foreground_process_path;
 #[cfg(not(windows))]
 use crate::daemon::foreground_process_name;
 use crate::display::Display;
 use crate::display::color::Rgb;
 use crate::display::window::Window;
+#[cfg(target_os = "macos")]
+use crate::display::{TabPanelEditOutcome, TabPanelEditTarget};
 use crate::event::{
     ActionContext, CommandHistory, CommandState, Event, EventProxy, EventType, InlineSearchState,
     Mouse, SearchState, TouchPurpose,
@@ -51,18 +57,27 @@ use crate::event::WebCommand;
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 use crate::message_bar::MessageBuffer;
 use crate::scheduler::Scheduler;
+use crate::tab_panel::TabActivity;
 use crate::tabs::TabId;
 use crate::window_kind::WindowKind;
 use crate::{input, renderer};
 
 #[cfg(target_os = "macos")]
+use crate::macos::web_commands::WebCommandState;
+#[cfg(target_os = "macos")]
+use crate::macos::favicon::{fetch_favicon, resolve_favicon_url, FaviconImage};
+#[cfg(target_os = "macos")]
 use crate::macos::webview::WebView;
+#[cfg(target_os = "macos")]
+use crate::tab_panel::TabFavicon;
 
 struct TabState {
     id: TabId,
     title: String,
+    custom_title: Option<String>,
     program_name: String,
     kind: WindowKind,
+    activity: TabActivity,
     terminal: Arc<FairMutex<Term<EventProxy>>>,
     notifier: Notifier,
     search_state: SearchState,
@@ -75,7 +90,11 @@ struct TabState {
     #[cfg(target_os = "macos")]
     web_view: Option<WebView>,
     #[cfg(target_os = "macos")]
-    web_command_state: crate::event::WebCommandState,
+    web_command_state: WebCommandState,
+    #[cfg(target_os = "macos")]
+    favicon: Option<TabFavicon>,
+    #[cfg(target_os = "macos")]
+    favicon_pending: bool,
     #[cfg(not(windows))]
     master_fd: RawFd,
     #[cfg(not(windows))]
@@ -85,20 +104,31 @@ struct TabState {
 #[cfg(target_os = "macos")]
 struct ClosedTab {
     kind: WindowKind,
-    title: String,
 }
+
+#[cfg(target_os = "macos")]
+const WEB_FAVICON_JS: &str = r#"
+(() => {
+  const link = document.querySelector('link[rel~="icon"]');
+  return link && link.href ? link.href : '';
+})()
+"#;
 
 impl TabState {
     fn panel_title(&self) -> String {
+        if let Some(custom_title) = &self.custom_title {
+            return custom_title.clone();
+        }
+
+        if self.kind.is_web() {
+            return self.title.clone();
+        }
+
         if self.program_name.is_empty() {
             return self.title.clone();
         }
 
-        if self.title.is_empty() || self.title == self.program_name {
-            return self.program_name.clone();
-        }
-
-        format!("{} - {}", self.program_name, self.title)
+        self.program_name.clone()
     }
 }
 
@@ -109,7 +139,7 @@ struct TabSlot {
 
 struct TabGroup {
     id: usize,
-    label: String,
+    name: Option<String>,
     tabs: Vec<TabId>,
 }
 
@@ -132,6 +162,7 @@ struct TabManager {
     free: Vec<usize>,
     active: Option<TabId>,
     groups: Vec<TabGroup>,
+    free_group_ids: BinaryHeap<Reverse<usize>>,
     next_group_id: usize,
 }
 
@@ -142,6 +173,7 @@ impl TabManager {
             free: Vec::new(),
             active: None,
             groups: Vec::new(),
+            free_group_ids: BinaryHeap::new(),
             next_group_id: 1,
         }
     }
@@ -225,8 +257,28 @@ impl TabManager {
         true
     }
 
+    fn iter(&self) -> impl Iterator<Item = &TabState> {
+        self.slots.iter().filter_map(|slot| slot.tab.as_ref())
+    }
+
     fn iter_mut(&mut self) -> impl Iterator<Item = &mut TabState> {
         self.slots.iter_mut().filter_map(|slot| slot.tab.as_mut())
+    }
+
+    fn prune_empty_groups(&mut self) {
+        let mut freed = Vec::new();
+        self.groups.retain(|group| {
+            if group.tabs.is_empty() {
+                freed.push(group.id);
+                false
+            } else {
+                true
+            }
+        });
+
+        for id in freed {
+            self.free_group_ids.push(Reverse(id));
+        }
     }
 
     fn remove(&mut self, tab_id: TabId) -> Option<TabState> {
@@ -242,7 +294,7 @@ impl TabManager {
         for group in &mut self.groups {
             group.tabs.retain(|id| *id != tab_id);
         }
-        self.groups.retain(|group| !group.tabs.is_empty());
+        self.prune_empty_groups();
 
         if self.active == Some(tab_id) {
             self.active = self.ordered_tabs().first().copied();
@@ -251,25 +303,66 @@ impl TabManager {
         Some(tab)
     }
 
-    fn move_tab(&mut self, tab_id: TabId, target_group: Option<usize>) -> bool {
+    fn move_tab(
+        &mut self,
+        tab_id: TabId,
+        target_group_id: Option<usize>,
+        target_index: Option<usize>,
+    ) -> bool {
         if self.get(tab_id).is_none() {
+            return false;
+        }
+
+        let mut origin_group_id = None;
+        let mut origin_index = None;
+        let mut origin_len = 0;
+        for group in &self.groups {
+            if let Some(pos) = group.tabs.iter().position(|id| *id == tab_id) {
+                origin_group_id = Some(group.id);
+                origin_index = Some(pos);
+                origin_len = group.tabs.len();
+                break;
+            }
+        }
+
+        let origin_group_id = match origin_group_id {
+            Some(id) => id,
+            None => return false,
+        };
+        if target_group_id == Some(origin_group_id) && origin_len <= 1 {
             return false;
         }
 
         for group in &mut self.groups {
             group.tabs.retain(|id| *id != tab_id);
         }
-        self.groups.retain(|group| !group.tabs.is_empty());
+        self.prune_empty_groups();
 
-        let target_index = target_group
-            .filter(|index| *index < self.groups.len())
-            .unwrap_or_else(|| {
-                let group = self.new_group();
-                self.groups.push(group);
-                self.groups.len() - 1
-            });
+        let mut target_index = target_index;
+        let group_index = if let Some(group_id) = target_group_id {
+            self.groups.iter().position(|group| group.id == group_id)
+        } else {
+            None
+        };
 
-        self.groups[target_index].tabs.push(tab_id);
+        let group_index = group_index.unwrap_or_else(|| {
+            let group = self.new_group();
+            self.groups.push(group);
+            self.groups.len() - 1
+        });
+
+        let group_id = self.groups[group_index].id;
+        if Some(group_id) == Some(origin_group_id) {
+            if let (Some(origin_index), Some(target_index_value)) = (origin_index, target_index) {
+                if target_index_value > origin_index {
+                    target_index = Some(target_index_value.saturating_sub(1));
+                }
+            }
+        }
+
+        let group = &mut self.groups[group_index];
+        let insert_index = target_index.unwrap_or(group.tabs.len()).min(group.tabs.len());
+        group.tabs.insert(insert_index, tab_id);
         true
     }
 
@@ -294,6 +387,47 @@ impl TabManager {
         true
     }
 
+    fn set_custom_title(&mut self, tab_id: TabId, title: Option<String>) -> bool {
+        let Some(tab) = self.get_mut(tab_id) else {
+            return false;
+        };
+
+        if tab.custom_title.as_deref() == title.as_deref() {
+            return false;
+        }
+
+        tab.custom_title = title;
+        true
+    }
+
+    fn custom_title(&self, tab_id: TabId) -> Option<&str> {
+        self.get(tab_id).and_then(|tab| tab.custom_title.as_deref())
+    }
+
+    fn tab_label(&self, tab_id: TabId) -> Option<String> {
+        self.get(tab_id).map(|tab| tab.panel_title())
+    }
+
+    fn set_group_name(&mut self, group_id: usize, name: Option<String>) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.id == group_id) else {
+            return false;
+        };
+
+        if group.name.as_deref() == name.as_deref() {
+            return false;
+        }
+
+        group.name = name;
+        true
+    }
+
+    fn group_name(&self, group_id: usize) -> Option<&str> {
+        self.groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .and_then(|group| group.name.as_deref())
+    }
+
     fn set_program_name(&mut self, tab_id: TabId, program_name: String) -> bool {
         let Some(tab) = self.get_mut(tab_id) else {
             return false;
@@ -313,7 +447,10 @@ impl TabManager {
             .iter()
             .map(|group| crate::tab_panel::TabPanelGroup {
                 id: group.id,
-                label: group.label.clone(),
+                label: match group.name.as_deref() {
+                    Some(name) if !name.is_empty() => format!("{} {}", group.id, name),
+                    _ => group.id.to_string(),
+                },
                 tabs: group
                     .tabs
                     .iter()
@@ -323,6 +460,13 @@ impl TabManager {
                             title: tab.panel_title(),
                             is_active: Some(*tab_id) == active,
                             kind: crate::window_kind::TabKind::from(&tab.kind),
+                            activity: if tab.kind.is_web() {
+                                None
+                            } else {
+                                Some(tab.activity.clone())
+                            },
+                            #[cfg(target_os = "macos")]
+                            favicon: tab.favicon.clone(),
                         })
                     })
                     .collect(),
@@ -356,9 +500,15 @@ impl TabManager {
     }
 
     fn new_group(&mut self) -> TabGroup {
-        let id = self.next_group_id;
-        self.next_group_id += 1;
-        TabGroup { id, label: id.to_string(), tabs: Vec::new() }
+        let id = match self.free_group_ids.pop() {
+            Some(Reverse(id)) => id,
+            None => {
+                let id = self.next_group_id;
+                self.next_group_id += 1;
+                id
+            }
+        };
+        TabGroup { id, name: None, tabs: Vec::new() }
     }
 }
 
@@ -372,6 +522,10 @@ pub struct WindowContext {
     tabs: TabManager,
     #[cfg(target_os = "macos")]
     closed_tabs: Vec<ClosedTab>,
+    #[cfg(target_os = "macos")]
+    next_favicon_id: u64,
+    #[cfg(target_os = "macos")]
+    next_favicon_char: u32,
     modifiers: Modifiers,
     occluded: bool,
     window_focused: bool,
@@ -508,6 +662,10 @@ impl WindowContext {
             tabs,
             #[cfg(target_os = "macos")]
             closed_tabs: Default::default(),
+            #[cfg(target_os = "macos")]
+            next_favicon_id: 0,
+            #[cfg(target_os = "macos")]
+            next_favicon_char: 0xE000,
             dirty: Default::default(),
         };
 
@@ -581,8 +739,10 @@ impl WindowContext {
         let tab = TabState {
             id: tab_id,
             title,
+            custom_title: None,
             program_name: String::new(),
             kind: window_kind,
+            activity: TabActivity::default(),
             terminal,
             notifier: Notifier(loop_tx),
             search_state: Default::default(),
@@ -596,6 +756,10 @@ impl WindowContext {
             web_view,
             #[cfg(target_os = "macos")]
             web_command_state: Default::default(),
+            #[cfg(target_os = "macos")]
+            favicon: None,
+            #[cfg(target_os = "macos")]
+            favicon_pending: false,
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
@@ -624,6 +788,123 @@ impl WindowContext {
     #[cfg(not(target_os = "macos"))]
     fn refresh_tab_panel(&mut self) {}
 
+    pub(crate) fn note_terminal_output(&mut self, tab_id: TabId, is_active: bool) {
+        let Some(tab) = self.tabs.get_mut(tab_id) else {
+            return;
+        };
+
+        if tab.kind.is_web() {
+            return;
+        }
+
+        tab.activity.note_output(Instant::now(), is_active);
+        self.refresh_tab_panel();
+    }
+
+    pub(crate) fn has_active_terminal_output(&self, now: Instant) -> bool {
+        self.tabs
+            .iter()
+            .any(|tab| !tab.kind.is_web() && tab.activity.is_active(now))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn tab_panel_enabled(&self) -> bool {
+        self.display.tab_panel.is_enabled()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn tab_panel_enabled(&self) -> bool {
+        false
+    }
+
+    fn begin_tab_rename(&mut self, tab_id: TabId) {
+        let Some(label) = self.tabs.tab_label(tab_id) else {
+            return;
+        };
+
+        if let Some(active_tab) = self.tabs.active_mut() {
+            if active_tab.command_state.is_active() {
+                active_tab.command_state.cancel();
+            }
+
+            if active_tab.search_state.history_index.is_some() {
+                active_tab.search_state.history_index = None;
+                active_tab.search_state.clear_focused_match();
+            }
+        }
+
+        if self.display.tab_panel.begin_edit_tab(tab_id, label) {
+            self.display.pending_update.dirty = true;
+            self.display.damage_tracker.frame().mark_fully_damaged();
+            self.dirty = true;
+            if self.display.window.has_frame {
+                self.display.window.request_redraw();
+            }
+        }
+    }
+
+    fn begin_group_rename(&mut self, group_id: usize) {
+        let name = self.tabs.group_name(group_id).unwrap_or("").to_string();
+        if let Some(active_tab) = self.tabs.active_mut() {
+            if active_tab.command_state.is_active() {
+                active_tab.command_state.cancel();
+            }
+
+            if active_tab.search_state.history_index.is_some() {
+                active_tab.search_state.history_index = None;
+                active_tab.search_state.clear_focused_match();
+            }
+        }
+
+        if self.display.tab_panel.begin_edit_group(group_id, name) {
+            self.display.pending_update.dirty = true;
+            self.display.damage_tracker.frame().mark_fully_damaged();
+            self.dirty = true;
+            if self.display.window.has_frame {
+                self.display.window.request_redraw();
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_tab_panel_width_px(&mut self, width_px: f32) {
+        let scale_factor = self.display.window.scale_factor as f32;
+        let padding_x = self.config.window.padding(scale_factor).0;
+        let cell_width = self.display.size_info.cell_width();
+        let viewport_width = self.display.size_info.width();
+
+        let available_cols = ((viewport_width - 2.0 * padding_x) / cell_width).floor() as isize;
+        let max_panel_cols = (available_cols - MIN_COLUMNS as isize).max(0) as usize;
+        let target_px = if max_panel_cols == 0 {
+            0.0
+        } else {
+            let min_width = cell_width;
+            let max_width = max_panel_cols as f32 * cell_width;
+            width_px.clamp(min_width, max_width)
+        };
+
+        let target_logical = (target_px / scale_factor).round() as usize;
+        if target_logical == self.config.window.tab_panel.width {
+            return;
+        }
+
+        let option = format!("window.tab_panel.width={target_logical}");
+        let parsed = toml::from_str(&option)
+            .expect("failed to parse tab panel width override");
+
+        if let Some(existing) = self
+            .window_config
+            .iter_mut()
+            .find(|(key, _)| key.trim_start().starts_with("window.tab_panel.width"))
+        {
+            *existing = (option, parsed);
+        } else {
+            self.window_config.push((option, parsed));
+        }
+
+        self.update_config(self.config.clone());
+    }
+
     fn update_webview_visibility(&mut self) {
         #[cfg(target_os = "macos")]
         {
@@ -642,11 +923,13 @@ impl WindowContext {
         }
     }
 
-    fn update_active_web_title(&mut self) {
+    fn update_active_web_title(&mut self, event_proxy: &EventLoopProxy<Event>) {
         #[cfg(target_os = "macos")]
         {
             let mut pending_scroll = None;
             let mut url_update = None;
+            let mut favicon_request = None;
+            let mut favicon_cleared = false;
             let title = {
                 let Some(active_tab) = self.tabs.active_mut() else {
                     return;
@@ -661,6 +944,10 @@ impl WindowContext {
                     if let WindowKind::Web { url: current_url } = &mut active_tab.kind {
                         *current_url = url.clone();
                     }
+                    active_tab.favicon = None;
+                    active_tab.favicon_pending = false;
+                    favicon_cleared = true;
+                    favicon_request = Some((active_tab.id, url.clone()));
                     pending_scroll = active_tab.web_command_state.take_pending_scroll(&url);
                     url_update = Some(url);
                 }
@@ -672,7 +959,7 @@ impl WindowContext {
                 self.update_tab_title(tab_id, title);
             }
 
-            if let Some(url) = url_update {
+            if let Some(url) = url_update.clone() {
                 self.command_history.record_url(url);
             }
 
@@ -683,7 +970,143 @@ impl WindowContext {
                     }
                 }
             }
+
+            if favicon_cleared {
+                self.refresh_tab_panel();
+            }
+
+            if let Some((tab_id, url)) = favicon_request {
+                self.request_web_favicon(tab_id, url, event_proxy);
+            }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn request_web_favicon(
+        &mut self,
+        tab_id: TabId,
+        page_url: String,
+        event_proxy: &EventLoopProxy<Event>,
+    ) {
+        let Some(tab) = self.tabs.get_mut(tab_id) else {
+            return;
+        };
+        if tab.favicon_pending {
+            return;
+        }
+        let Some(web_view) = tab.web_view.as_mut() else {
+            return;
+        };
+
+        tab.favicon_pending = true;
+
+        let proxy = event_proxy.clone();
+        let window_id = self.display.window.id();
+        web_view.eval_js_string(WEB_FAVICON_JS, move |result| {
+            let hint = result.unwrap_or_default();
+            let icon_url = resolve_favicon_url(&page_url, &hint);
+
+            match icon_url {
+                Some(icon_url) => {
+                    std::thread::spawn(move || {
+                        let icon = fetch_favicon(&icon_url);
+                        let event = Event::for_tab(
+                            EventType::WebFavicon { page_url, icon },
+                            window_id,
+                            tab_id,
+                        );
+                        let _ = proxy.send_event(event);
+                    });
+                },
+                None => {
+                    let event = Event::for_tab(
+                        EventType::WebFavicon { page_url, icon: None },
+                        window_id,
+                        tab_id,
+                    );
+                    let _ = proxy.send_event(event);
+                },
+            }
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    fn handle_web_favicon(
+        &mut self,
+        tab_id: TabId,
+        page_url: String,
+        icon: Option<FaviconImage>,
+    ) {
+        let Some(tab) = self.tabs.get(tab_id) else {
+            return;
+        };
+        let WindowKind::Web { url } = &tab.kind else {
+            return;
+        };
+        if url != &page_url {
+            return;
+        }
+
+        let Some(icon) = icon else {
+            if let Some(tab) = self.tabs.get_mut(tab_id) {
+                tab.favicon_pending = false;
+            }
+            return;
+        };
+
+        let id = self.next_favicon_id;
+        self.next_favicon_id = self.next_favicon_id.wrapping_add(1);
+        let character = self.allocate_favicon_char();
+        let Some(tab) = self.tabs.get_mut(tab_id) else {
+            return;
+        };
+        tab.favicon_pending = false;
+        tab.favicon = Some(TabFavicon::new(id, character, Arc::new(icon)));
+        self.refresh_tab_panel();
+        self.dirty = true;
+    }
+
+    #[cfg(target_os = "macos")]
+    fn handle_web_cursor(&mut self, tab_id: TabId, cursor: Option<CursorIcon>) {
+        let Some(tab) = self.tabs.get_mut(tab_id) else {
+            return;
+        };
+
+        tab.web_command_state.set_cursor_pending(false);
+        if !tab.kind.is_web() {
+            return;
+        }
+
+        let Some(cursor) = cursor else {
+            return;
+        };
+
+        if tab.web_command_state.last_cursor() == Some(cursor) {
+            return;
+        }
+
+        tab.web_command_state.set_last_cursor(cursor);
+        if Some(tab_id) == self.tabs.active_id() {
+            self.display.window.set_mouse_cursor(cursor);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn allocate_favicon_char(&mut self) -> char {
+        const BMP_END: u32 = 0xF8FF;
+        const SUP_START: u32 = 0xF0000;
+        const SUP_END: u32 = 0xFFFFD;
+
+        if self.next_favicon_char == BMP_END + 1 {
+            self.next_favicon_char = SUP_START;
+        }
+        if self.next_favicon_char > SUP_END {
+            panic!("Ran out of favicon glyph slots");
+        }
+
+        let value = self.next_favicon_char;
+        self.next_favicon_char = self.next_favicon_char.saturating_add(1);
+        char::from_u32(value).expect("Invalid favicon glyph")
     }
 
     fn set_active_tab(&mut self, tab_id: TabId) {
@@ -711,9 +1134,18 @@ impl WindowContext {
         if let Some(active_tab) = self.tabs.get_mut(tab_id) {
             if !active_tab.kind.is_web() {
                 active_tab.terminal.lock().is_focused = self.window_focused;
+                active_tab.activity.mark_seen();
+            } else {
+                #[cfg(target_os = "macos")]
+                {
+                    self.display.window.set_mouse_cursor(CursorIcon::Default);
+                    active_tab.web_command_state.set_last_cursor(CursorIcon::Default);
+                    active_tab.web_command_state.set_cursor_pending(false);
+                }
             }
             if !self.preserve_title && self.config.window.dynamic_title {
-                self.display.window.set_title(active_tab.title.clone());
+                let title = active_tab.custom_title.clone().unwrap_or_else(|| active_tab.title.clone());
+                self.display.window.set_title(title);
             }
         }
 
@@ -730,6 +1162,7 @@ impl WindowContext {
                 #[cfg(target_os = "macos")]
                 active_tab.web_command_state.reset_mode();
             }
+            self.display.tab_panel.cancel_edit();
             self.update_webview_visibility();
             self.display.pending_update.dirty = true;
             self.display.damage_tracker.frame().mark_fully_damaged();
@@ -745,6 +1178,7 @@ impl WindowContext {
     ) -> Result<(), Box<dyn Error>> {
         let mut pty_config = self.config.pty_config();
         options.terminal_options.override_pty_config(&mut pty_config);
+        let command_input = options.command_input.clone();
         let tab_id = Self::spawn_tab(
             &mut self.tabs,
             &self.display,
@@ -754,6 +1188,14 @@ impl WindowContext {
             options.window_kind,
         )?;
         self.set_active_tab(tab_id);
+        if let Some(input) = command_input.as_deref() {
+            if let Some(active_tab) = self.tabs.active_mut() {
+                active_tab.command_state.start_with_input(':', input);
+                self.display.pending_update.dirty = true;
+                self.display.damage_tracker.frame().mark_fully_damaged();
+                self.dirty = true;
+            }
+        }
         Ok(())
     }
 
@@ -788,7 +1230,6 @@ impl WindowContext {
         if tab.kind.is_web() {
             self.closed_tabs.push(ClosedTab {
                 kind: tab.kind.clone(),
-                title: tab.title.clone(),
             });
             const MAX_CLOSED_TABS: usize = 10;
             if self.closed_tabs.len() > MAX_CLOSED_TABS {
@@ -897,13 +1338,57 @@ impl WindowContext {
     }
 
     fn update_tab_title(&mut self, tab_id: TabId, title: String) {
+        let custom_title = self.tabs.custom_title(tab_id).map(str::to_string);
         if self.tabs.set_title(tab_id, title.clone()) {
             if Some(tab_id) == self.tabs.active_id()
                 && !self.preserve_title
                 && self.config.window.dynamic_title
             {
-                self.display.window.set_title(title);
+                let window_title = custom_title.clone().unwrap_or(title);
+                self.display.window.set_title(window_title);
             }
+            if custom_title.is_none() {
+                self.refresh_tab_panel();
+            }
+        }
+    }
+
+    pub(crate) fn rename_tab(&mut self, tab_id: TabId, name: Option<String>) {
+        if !self.tabs.set_custom_title(tab_id, name.clone()) {
+            return;
+        }
+
+        if Some(tab_id) == self.tabs.active_id()
+            && !self.preserve_title
+            && self.config.window.dynamic_title
+        {
+            let title = match name {
+                Some(title) => title,
+                None => self.tabs.get(tab_id).map(|tab| tab.title.clone()).unwrap_or_default(),
+            };
+            self.display.window.set_title(title);
+        }
+
+        self.refresh_tab_panel();
+    }
+
+    pub(crate) fn rename_group(&mut self, group_id: usize, name: Option<String>) {
+        let name = name.and_then(|name| {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+
+            let prefix = group_id.to_string();
+            let cleaned = trimmed.strip_prefix(&prefix).map(|rest| rest.trim_start()).unwrap_or(trimmed);
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned.to_string())
+            }
+        });
+
+        if self.tabs.set_group_name(group_id, name) {
             self.refresh_tab_panel();
         }
     }
@@ -1069,11 +1554,16 @@ impl WindowContext {
 
         match draw_mode(&tab.kind) {
             DrawMode::Web => {
+                #[cfg(target_os = "macos")]
+                let status_label = tab.web_command_state.status_label();
+                #[cfg(not(target_os = "macos"))]
+                let status_label = "NORMAL";
                 self.display.draw_web(
                     scheduler,
                     &self.message_buffer,
                     &self.config,
                     &tab.command_state,
+                    status_label,
                 );
             },
             DrawMode::Terminal => {
@@ -1134,6 +1624,22 @@ impl WindowContext {
                     #[cfg(target_os = "macos")]
                     EventType::WebCommand(command) => {
                         self.handle_web_command_event(event, command, clipboard, event_proxy);
+                        continue;
+                    },
+                    #[cfg(target_os = "macos")]
+                    EventType::WebFavicon { page_url, icon } => {
+                        let Some(tab_id) = event.tab_id() else {
+                            continue;
+                        };
+                        self.handle_web_favicon(tab_id, page_url.clone(), icon.clone());
+                        continue;
+                    },
+                    #[cfg(target_os = "macos")]
+                    EventType::WebCursor { cursor } => {
+                        let Some(tab_id) = event.tab_id() else {
+                            continue;
+                        };
+                        self.handle_web_cursor(tab_id, *cursor);
                         continue;
                     },
                     EventType::Terminal(term_event) => {
@@ -1266,7 +1772,7 @@ impl WindowContext {
             active_tab.mouse.hint_highlight_dirty = false;
         }
 
-        self.update_active_web_title();
+        self.update_active_web_title(event_proxy);
 
         // Don't call `request_redraw` when event is `RedrawRequested` since the `dirty` flag
         // represents the current frame, but redraw is for the next frame.
@@ -1295,6 +1801,9 @@ impl WindowContext {
                 ..
             } => {
                 let update = self.display.tab_panel.cursor_moved(*position, &self.display.size_info);
+                if let Some(width_px) = update.resize_width {
+                    self.set_tab_panel_width_px(width_px);
+                }
                 if update.needs_redraw {
                     self.dirty = true;
                     if self.display.window.has_frame {
@@ -1320,22 +1829,27 @@ impl WindowContext {
                         crate::tab_panel::TabPanelCommand::Focus(tab_id) => {
                             self.set_active_tab(tab_id);
                         },
-                        crate::tab_panel::TabPanelCommand::Move { tab_id, target_group } => {
-                            if self.tabs.move_tab(tab_id, target_group) {
+                        crate::tab_panel::TabPanelCommand::Close(tab_id) => {
+                            let event =
+                                Event::new(EventType::CloseTab(tab_id), self.display.window.id());
+                            let _ = event_proxy.send_event(event);
+                        },
+                        crate::tab_panel::TabPanelCommand::Move {
+                            tab_id,
+                            target_group_id,
+                            target_index,
+                        } => {
+                            if self.tabs.move_tab(tab_id, target_group_id, target_index) {
                                 self.refresh_tab_panel();
                             }
                         },
+                        crate::tab_panel::TabPanelCommand::RenameTab(tab_id) => {
+                            self.begin_tab_rename(tab_id);
+                        },
+                        crate::tab_panel::TabPanelCommand::RenameGroup(group_id) => {
+                            self.begin_group_rename(group_id);
+                        },
                     }
-                }
-
-                if update.create_tab {
-                    let mut options = WindowOptions::default();
-                    if let Some(tab) = self.tabs.active() {
-                        options.terminal_options.working_directory =
-                            foreground_process_path(tab.master_fd, tab.shell_pid).ok();
-                    }
-                    let event = Event::new(EventType::CreateTab(options), self.display.window.id());
-                    let _ = event_proxy.send_event(event);
                 }
 
                 if update.capture {
@@ -1351,10 +1865,69 @@ impl WindowContext {
                 false
             },
             WinitEvent::WindowEvent {
+                event: WindowEvent::KeyboardInput { event, is_synthetic: false, .. },
+                ..
+            } => {
+                if !self.display.tab_panel.is_editing() {
+                    return false;
+                }
+
+                let outcome = self.display.tab_panel.handle_key_event(event);
+                let needs_redraw = self.apply_tab_panel_edit_outcome(outcome);
+                if needs_redraw {
+                    self.dirty = true;
+                    if self.display.window.has_frame {
+                        self.display.window.request_redraw();
+                    }
+                }
+                true
+            },
+            WinitEvent::WindowEvent { event: WindowEvent::Ime(ime), .. } => {
+                if !self.display.tab_panel.is_editing() {
+                    return false;
+                }
+
+                let outcome = match ime {
+                    Ime::Commit(text) => self.display.tab_panel.handle_ime_commit(text),
+                    Ime::Preedit(_, _) | Ime::Enabled | Ime::Disabled => TabPanelEditOutcome::None,
+                };
+                let needs_redraw = self.apply_tab_panel_edit_outcome(outcome);
+                if needs_redraw {
+                    self.dirty = true;
+                    if self.display.window.has_frame {
+                        self.display.window.request_redraw();
+                    }
+                }
+                true
+            },
+            WinitEvent::WindowEvent {
                 event: WindowEvent::MouseWheel { .. },
                 ..
             } => self.display.tab_panel.should_capture_last(),
             _ => false,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_tab_panel_edit_outcome(&mut self, outcome: TabPanelEditOutcome) -> bool {
+        match outcome {
+            TabPanelEditOutcome::None => false,
+            TabPanelEditOutcome::Changed | TabPanelEditOutcome::Cancelled => true,
+            TabPanelEditOutcome::Commit(commit) => {
+                let trimmed = commit.text.trim();
+                let name = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
+
+                match commit.target {
+                    TabPanelEditTarget::Tab(tab_id) => self.rename_tab(tab_id, name),
+                    TabPanelEditTarget::Group(group_id) => self.rename_group(group_id, name),
+                }
+
+                true
+            },
         }
     }
 
@@ -1519,6 +2092,7 @@ impl WindowContext {
             };
 
             let mut terminal = active_tab.terminal.lock();
+            let web_status_bar = active_tab.kind.is_web();
 
             // Compute cursor positions before resize.
             let num_lines = terminal.screen_lines();
@@ -1534,7 +2108,7 @@ impl WindowContext {
                 &mut active_tab.notifier,
                 message_buffer,
                 &mut active_tab.search_state,
-                &active_tab.command_state,
+                web_status_bar,
                 config,
             );
 

@@ -9,6 +9,7 @@ mod smoke {
     use objc2::encode::{Encode, Encoding};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
+    use objc2::runtime::Bool;
     use objc2::{class, msg_send, MainThreadMarker};
     use objc2_foundation::NSString;
     use winit::application::ApplicationHandler;
@@ -17,6 +18,7 @@ mod smoke {
     use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use winit::window::{Window, WindowAttributes};
+    use libc::{c_char, c_void};
 
     const TITLE: &str = "AlacrittyWebSmoke";
     const TIMEOUT: Duration = Duration::from_secs(10);
@@ -93,6 +95,7 @@ mod smoke {
                     "Failed to allocate WKWebViewConfiguration",
                 )
             })?;
+            Self::enable_web_authentication(&*config)?;
             let store: *mut AnyObject =
                 unsafe { msg_send![class!(WKWebsiteDataStore), defaultDataStore] };
             unsafe {
@@ -116,6 +119,55 @@ mod smoke {
                 return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid URL").into());
             }
             Ok(web_view)
+        }
+
+        fn enable_web_authentication(config: &AnyObject) -> Result<(), Box<dyn Error>> {
+            type WebAuthGet = unsafe extern "C" fn(*mut AnyObject) -> Bool;
+            type WebAuthSet = unsafe extern "C" fn(*mut AnyObject, Bool);
+
+            let get_ptr = unsafe {
+                libc::dlsym(
+                    libc::RTLD_DEFAULT,
+                    b"_WKPreferencesGetWebAuthenticationEnabled\0".as_ptr() as *const c_char,
+                )
+            };
+            let set_ptr = unsafe {
+                libc::dlsym(
+                    libc::RTLD_DEFAULT,
+                    b"_WKPreferencesSetWebAuthenticationEnabled\0".as_ptr() as *const c_char,
+                )
+            };
+
+            if get_ptr.is_null() || set_ptr.is_null() {
+                return Ok(());
+            }
+
+            let get = unsafe { std::mem::transmute::<*mut c_void, WebAuthGet>(get_ptr) };
+            let set = unsafe { std::mem::transmute::<*mut c_void, WebAuthSet>(set_ptr) };
+
+            let prefs: *mut AnyObject = unsafe { msg_send![config, preferences] };
+            if prefs.is_null() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "WKWebViewConfiguration has no preferences",
+                )
+                .into());
+            }
+
+            unsafe {
+                set(prefs, Bool::YES);
+            }
+
+            let enabled = unsafe { get(prefs) };
+            if !enabled.as_bool() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to enable WebAuthentication support",
+                )
+                .into());
+            }
+
+            Ok(())
         }
 
         fn update_frame(&mut self, window: &Window) {

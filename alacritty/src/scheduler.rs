@@ -29,6 +29,7 @@ pub enum Topic {
     BlinkCursor,
     BlinkTimeout,
     ForegroundProcess,
+    TabActivityTick,
     Frame,
 }
 
