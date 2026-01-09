@@ -1,18 +1,18 @@
-TARGET = alacritty
+TARGET = tabor
 
 ASSETS_DIR = extra
 RELEASE_DIR = target/release
-MANPAGE = $(ASSETS_DIR)/man/alacritty.1.scd
-MANPAGE-MSG = $(ASSETS_DIR)/man/alacritty-msg.1.scd
-MANPAGE-CONFIG = $(ASSETS_DIR)/man/alacritty.5.scd
-MANPAGE-CONFIG-BINDINGS = $(ASSETS_DIR)/man/alacritty-bindings.5.scd
-TERMINFO = $(ASSETS_DIR)/alacritty.info
+MANPAGE = $(ASSETS_DIR)/man/tabor.1.scd
+MANPAGE-MSG = $(ASSETS_DIR)/man/tabor-msg.1.scd
+MANPAGE-CONFIG = $(ASSETS_DIR)/man/tabor.5.scd
+MANPAGE-CONFIG-BINDINGS = $(ASSETS_DIR)/man/tabor-bindings.5.scd
+TERMINFO = $(ASSETS_DIR)/tabor.info
 COMPLETIONS_DIR = $(ASSETS_DIR)/completions
-COMPLETIONS = $(COMPLETIONS_DIR)/_alacritty \
-	$(COMPLETIONS_DIR)/alacritty.bash \
-	$(COMPLETIONS_DIR)/alacritty.fish
+COMPLETIONS = $(COMPLETIONS_DIR)/_tabor \
+	$(COMPLETIONS_DIR)/tabor.bash \
+	$(COMPLETIONS_DIR)/tabor.fish
 
-APP_NAME = Alacritty.app
+APP_NAME = Tabor.app
 APP_TEMPLATE = $(ASSETS_DIR)/osx/$(APP_NAME)
 APP_DIR = $(RELEASE_DIR)/osx
 APP_BINARY = $(RELEASE_DIR)/$(TARGET)
@@ -21,7 +21,7 @@ APP_EXTRAS_DIR = $(APP_DIR)/$(APP_NAME)/Contents/Resources
 APP_COMPLETIONS_DIR = $(APP_EXTRAS_DIR)/completions
 CODESIGN_ENTITLEMENTS ?=
 
-DMG_NAME = Alacritty.dmg
+DMG_NAME = Tabor.dmg
 DMG_DIR = $(RELEASE_DIR)/osx
 
 vpath $(TARGET) $(RELEASE_DIR)
@@ -42,17 +42,17 @@ $(TARGET)-universal:
 	MACOSX_DEPLOYMENT_TARGET="10.12" cargo build --release --target=aarch64-apple-darwin
 	@lipo target/{x86_64,aarch64}-apple-darwin/release/$(TARGET) -create -output $(APP_BINARY)
 
-app: $(APP_NAME)-native ## Create an Alacritty.app
-app-universal: $(APP_NAME)-universal ## Create a universal Alacritty.app
+app: $(APP_NAME)-native ## Create an Tabor.app
+app-universal: $(APP_NAME)-universal ## Create a universal Tabor.app
 $(APP_NAME)-%: $(TARGET)-%
 	@mkdir -p $(APP_BINARY_DIR)
 	@mkdir -p $(APP_EXTRAS_DIR)
 	@mkdir -p $(APP_COMPLETIONS_DIR)
-	@scdoc < $(MANPAGE) | gzip -c > $(APP_EXTRAS_DIR)/alacritty.1.gz
-	@scdoc < $(MANPAGE-MSG) | gzip -c > $(APP_EXTRAS_DIR)/alacritty-msg.1.gz
-	@scdoc < $(MANPAGE-CONFIG) | gzip -c > $(APP_EXTRAS_DIR)/alacritty.5.gz
-	@scdoc < $(MANPAGE-CONFIG-BINDINGS) | gzip -c > $(APP_EXTRAS_DIR)/alacritty-bindings.5.gz
-	@tic -xe alacritty,alacritty-direct -o $(APP_EXTRAS_DIR) $(TERMINFO)
+	@scdoc < $(MANPAGE) | gzip -c > $(APP_EXTRAS_DIR)/tabor.1.gz
+	@scdoc < $(MANPAGE-MSG) | gzip -c > $(APP_EXTRAS_DIR)/tabor-msg.1.gz
+	@scdoc < $(MANPAGE-CONFIG) | gzip -c > $(APP_EXTRAS_DIR)/tabor.5.gz
+	@scdoc < $(MANPAGE-CONFIG-BINDINGS) | gzip -c > $(APP_EXTRAS_DIR)/tabor-bindings.5.gz
+	@tic -xe tabor,tabor-direct -o $(APP_EXTRAS_DIR) $(TERMINFO)
 	@cp -fRp $(APP_TEMPLATE) $(APP_DIR)
 	@cp -fp $(APP_BINARY) $(APP_BINARY_DIR)
 	@cp -fp $(COMPLETIONS) $(APP_COMPLETIONS_DIR)
@@ -61,13 +61,13 @@ $(APP_NAME)-%: $(TARGET)-%
 	@codesign --force --deep --sign - $(if $(CODESIGN_ENTITLEMENTS),--entitlements "$(CODESIGN_ENTITLEMENTS)") "$(APP_DIR)/$(APP_NAME)"
 	@echo "Created '$(APP_NAME)' in '$(APP_DIR)'"
 
-dmg: $(DMG_NAME)-native ## Create an Alacritty.dmg
-dmg-universal: $(DMG_NAME)-universal ## Create a universal Alacritty.dmg
+dmg: $(DMG_NAME)-native ## Create an Tabor.dmg
+dmg-universal: $(DMG_NAME)-universal ## Create a universal Tabor.dmg
 $(DMG_NAME)-%: $(APP_NAME)-%
 	@echo "Packing disk image..."
 	@ln -sf /Applications $(DMG_DIR)/Applications
 	@hdiutil create $(DMG_DIR)/$(DMG_NAME) \
-		-volname "Alacritty" \
+		-volname "Tabor" \
 		-fs HFS+ \
 		-srcfolder $(APP_DIR) \
 		-ov -format UDZO

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+TryExec=tabor
+Exec=tabor
+Icon=Tabor
+Terminal=false
+Categories=System;TerminalEmulator;
+
+Name=Tabor
+GenericName=Terminal
+Comment=A tabbed, cross-platform, OpenGL terminal emulator
+StartupNotify=true
+StartupWMClass=Tabor
+Actions=New;
+
+[Desktop Action New]
+Name=New Terminal
+Exec=tabor

@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "alacritty",
-    "alacritty_terminal",
-    "alacritty_config",
-    "alacritty_config_derive",
+    "tabor",
+    "tabor_terminal",
+    "tabor_config",
+    "tabor_config_derive",
 ]
 resolver = "2"
 

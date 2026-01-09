@@ -31,95 +31,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alacritty"
-version = "0.17.0-dev"
-dependencies = [
- "ahash",
- "alacritty_config",
- "alacritty_config_derive",
- "alacritty_terminal",
- "bitflags 2.9.4",
- "block2 0.6.2",
- "clap",
- "clap_complete",
- "copypasta",
- "crossfont",
- "dirs",
- "embed-resource",
- "gl_generator",
- "glutin",
- "home",
- "image",
- "libc",
- "log",
- "notify",
- "objc2 0.6.3",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "parking_lot",
- "png 0.17.16",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "toml",
- "toml_edit",
- "unicode-width",
- "ureq",
- "url",
- "windows-sys 0.59.0",
- "winit",
- "xdg",
-]
-
-[[package]]
-name = "alacritty_config"
-version = "0.2.4-dev"
-dependencies = [
- "alacritty_config_derive",
- "log",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "alacritty_config_derive"
-version = "0.2.6-dev"
-dependencies = [
- "alacritty_config",
- "log",
- "proc-macro2",
- "quote",
- "serde",
- "syn",
- "toml",
-]
-
-[[package]]
-name = "alacritty_terminal"
-version = "0.25.2-dev"
-dependencies = [
- "base64",
- "bitflags 2.9.4",
- "home",
- "libc",
- "log",
- "miow",
- "parking_lot",
- "piper",
- "polling",
- "regex-automata",
- "rustix 1.1.2",
- "rustix-openpty",
- "serde",
- "serde_json",
- "signal-hook",
- "unicode-width",
- "vte",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "android-activity"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2207,6 +2118,95 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tabor"
+version = "0.17.0-dev"
+dependencies = [
+ "ahash",
+ "bitflags 2.9.4",
+ "block2 0.6.2",
+ "clap",
+ "clap_complete",
+ "copypasta",
+ "crossfont",
+ "dirs",
+ "embed-resource",
+ "gl_generator",
+ "glutin",
+ "home",
+ "image",
+ "libc",
+ "log",
+ "notify",
+ "objc2 0.6.3",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "parking_lot",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tabor_config",
+ "tabor_config_derive",
+ "tabor_terminal",
+ "tempfile",
+ "toml",
+ "toml_edit",
+ "unicode-width",
+ "ureq",
+ "url",
+ "windows-sys 0.59.0",
+ "winit",
+ "xdg",
+]
+
+[[package]]
+name = "tabor_config"
+version = "0.2.4-dev"
+dependencies = [
+ "log",
+ "serde",
+ "tabor_config_derive",
+ "toml",
+]
+
+[[package]]
+name = "tabor_config_derive"
+version = "0.2.6-dev"
+dependencies = [
+ "log",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn",
+ "tabor_config",
+ "toml",
+]
+
+[[package]]
+name = "tabor_terminal"
+version = "0.25.2-dev"
+dependencies = [
+ "base64",
+ "bitflags 2.9.4",
+ "home",
+ "libc",
+ "log",
+ "miow",
+ "parking_lot",
+ "piper",
+ "polling",
+ "regex-automata",
+ "rustix 1.1.2",
+ "rustix-openpty",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "unicode-width",
+ "vte",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

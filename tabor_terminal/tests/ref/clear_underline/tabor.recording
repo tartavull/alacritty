@@ -1,0 +1,5 @@
+[undeadleech@undeadlap tabor]$ echo -e "\e[4mUNDERLINED"
+[4mUNDERLINED
+[undeadleech@undeadlap tabor]$ clear
+[3J[H[2J[undeadleech@undeadlap tabor]$ exit
+exit

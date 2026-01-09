@@ -11,7 +11,7 @@ packages:
   - scdoc
 
 sources:
-  - https://github.com/alacritty/alacritty
+  - https://github.com/tartavull/tabor
 
 environment:
   PATH: /home/build/.cargo/bin:/usr/bin/
@@ -20,31 +20,31 @@ tasks:
   - rustup: |
       curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable --profile minimal
   - rustfmt: |
-      cd alacritty
+      cd tabor
       rustup toolchain install nightly -c rustfmt
       cargo +nightly fmt -- --check
   - man-pages: |
-      cd alacritty
-      cat extra/man/alacritty.1.scd | scdoc > /dev/null
-      cat extra/man/alacritty-msg.1.scd | scdoc > /dev/null
-      cat extra/man/alacritty.5.scd | scdoc > /dev/null
-      cat extra/man/alacritty-bindings.5.scd | scdoc > /dev/null
+      cd tabor
+      cat extra/man/tabor.1.scd | scdoc > /dev/null
+      cat extra/man/tabor-msg.1.scd | scdoc > /dev/null
+      cat extra/man/tabor.5.scd | scdoc > /dev/null
+      cat extra/man/tabor-bindings.5.scd | scdoc > /dev/null
   - test: |
-      cd alacritty
+      cd tabor
       cargo test
   - oldstable: |
-      cd alacritty
+      cd tabor
       oldstable=$(cat Cargo.toml | grep "rust-version" | sed 's/.*"\(.*\)".*/\1/')
       rustup toolchain install --profile minimal $oldstable
       rustup default $oldstable
       cargo test
   - clippy: |
-      cd alacritty
+      cd tabor
       rustup component add clippy
       cargo clippy --all-targets
   - feature-wayland: |
-      cd alacritty/alacritty
+      cd tabor/tabor
       RUSTFLAGS="-D warnings" cargo test --no-default-features --features=wayland
   - feature-x11: |
-      cd alacritty/alacritty
+      cd tabor/tabor
       RUSTFLAGS="-D warnings" cargo test --no-default-features --features=x11

@@ -1,5 +1,5 @@
 {
-  description = "Alacritty devshell";
+  description = "Tabor devshell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -49,14 +49,14 @@
               if [ -x "$HOME/.nix-profile/bin/zsh" ]; then
                 export SHELL="$HOME/.nix-profile/bin/zsh"
               fi
-              exec cargo run -p alacritty --bin alacritty
+              exec cargo run -p tabor --bin tabor
             '')
           ] ++ darwinLibraries ++ linuxLibraries;
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 
           shellHook = ''
-            echo "Alacritty dev shell activated."
+            echo "Tabor dev shell activated."
           '';
         };
       });

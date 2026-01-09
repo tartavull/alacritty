@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<component type="desktop-application">
+  <id>org.tabor.Tabor</id>
+
+  <developer_name>Christian Duerr</developer_name>
+  <developer id="org.tabor">
+    <name>Christian Duerr</name>
+  </developer>
+
+  <name>Tabor</name>
+
+  <project_license>Apache-2.0</project_license>
+  <metadata_license>MIT</metadata_license>
+
+  <summary>A tabbed, cross-platform, OpenGL terminal emulator</summary>
+  <description>
+    <p>
+      Tabor is a tabbed terminal forked from Alacritty that comes with sensible defaults,
+      but allows for extensive configuration. By integrating with other
+      applications, rather than reimplementing their functionality, it manages
+      to provide a flexible set of features with high performance.
+    </p>
+    <ul>
+      <li>Wayland native</li>
+      <li>X11 native</li>
+      <li>DE agnostic</li>
+    </ul>
+  </description>
+
+  <categories>
+    <category>TerminalEmulator</category>
+  </categories>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/tartavull/tabor/master/extra/promo/tabor-readme.png</image>
+      <caption>Tabor with default theme showing neovim</caption>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/tartavull/tabor</url>
+  <url type="bugtracker">https://github.com/tartavull/tabor/issues</url>
+
+  <launchable type="desktop-id">Tabor.desktop</launchable>
+
+  <content_rating type="oars-1.0" />
+</component>
