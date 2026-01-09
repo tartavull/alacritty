@@ -585,8 +585,7 @@ impl TabPanel {
                             Some(edit)
                                 if edit.target == TabPanelEditTarget::Group(group.id) =>
                             {
-                                let name = render_edit_text(&edit.text, edit.cursor);
-                                format!("{} {}", group.id, name)
+                                render_edit_text(&edit.text, edit.cursor)
                             },
                             _ => group.label.clone(),
                         };
@@ -1168,7 +1167,7 @@ impl TabPanel {
             items.push(RenderItem {
                 line,
                 kind: PanelItemKind::GhostGroupHeader {
-                    label: new_group_id.to_string(),
+                    label: format!("group {}", new_group_id),
                 },
                 style: RenderStyle::Ghost,
             });

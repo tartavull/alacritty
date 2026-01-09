@@ -1,7 +1,5 @@
 //! Terminal window context.
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
@@ -162,7 +160,6 @@ struct TabManager {
     free: Vec<usize>,
     active: Option<TabId>,
     groups: Vec<TabGroup>,
-    free_group_ids: BinaryHeap<Reverse<usize>>,
     next_group_id: usize,
 }
 
@@ -173,7 +170,6 @@ impl TabManager {
             free: Vec::new(),
             active: None,
             groups: Vec::new(),
-            free_group_ids: BinaryHeap::new(),
             next_group_id: 1,
         }
     }
@@ -266,19 +262,11 @@ impl TabManager {
     }
 
     fn prune_empty_groups(&mut self) {
-        let mut freed = Vec::new();
-        self.groups.retain(|group| {
-            if group.tabs.is_empty() {
-                freed.push(group.id);
-                false
-            } else {
-                true
-            }
-        });
-
-        for id in freed {
-            self.free_group_ids.push(Reverse(id));
+        self.groups.retain(|group| !group.tabs.is_empty());
+        for (index, group) in self.groups.iter_mut().enumerate() {
+            group.id = index + 1;
         }
+        self.next_group_id = self.groups.len() + 1;
     }
 
     fn remove(&mut self, tab_id: TabId) -> Option<TabState> {
@@ -331,6 +319,16 @@ impl TabManager {
         };
         if target_group_id == Some(origin_group_id) && origin_len <= 1 {
             return false;
+        }
+
+        let origin_group_removed = origin_len == 1 && target_group_id != Some(origin_group_id);
+        let mut target_group_id = target_group_id;
+        if origin_group_removed {
+            if let Some(id) = target_group_id {
+                if id > origin_group_id {
+                    target_group_id = Some(id - 1);
+                }
+            }
         }
 
         for group in &mut self.groups {
@@ -448,8 +446,8 @@ impl TabManager {
             .map(|group| crate::tab_panel::TabPanelGroup {
                 id: group.id,
                 label: match group.name.as_deref() {
-                    Some(name) if !name.is_empty() => format!("{} {}", group.id, name),
-                    _ => group.id.to_string(),
+                    Some(name) if !name.is_empty() => name.to_string(),
+                    _ => format!("group {}", group.id),
                 },
                 tabs: group
                     .tabs
@@ -500,22 +498,13 @@ impl TabManager {
     }
 
     fn new_group(&mut self) -> TabGroup {
-        let id = match self.free_group_ids.pop() {
-            Some(Reverse(id)) => id,
-            None => {
-                let id = self.next_group_id;
-                self.next_group_id += 1;
-                id
-            }
-        };
+        let id = self.next_group_id;
+        self.next_group_id += 1;
         TabGroup { id, name: None, tabs: Vec::new() }
     }
 
     fn preview_group_id(&self) -> usize {
-        self.free_group_ids
-            .peek()
-            .map(|entry| entry.0)
-            .unwrap_or(self.next_group_id)
+        self.next_group_id
     }
 }
 
@@ -852,7 +841,11 @@ impl WindowContext {
     }
 
     fn begin_group_rename(&mut self, group_id: usize) {
-        let name = self.tabs.group_name(group_id).unwrap_or("").to_string();
+        let name = self
+            .tabs
+            .group_name(group_id)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("group {group_id}"));
         if let Some(active_tab) = self.tabs.active_mut() {
             if active_tab.command_state.is_active() {
                 active_tab.command_state.cancel();
@@ -1387,12 +1380,10 @@ impl WindowContext {
                 return None;
             }
 
-            let prefix = group_id.to_string();
-            let cleaned = trimmed.strip_prefix(&prefix).map(|rest| rest.trim_start()).unwrap_or(trimmed);
-            if cleaned.is_empty() {
+            if trimmed == format!("group {group_id}") {
                 None
             } else {
-                Some(cleaned.to_string())
+                Some(trimmed.to_string())
             }
         });
 
