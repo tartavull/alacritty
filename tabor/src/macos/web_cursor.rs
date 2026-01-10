@@ -2,44 +2,53 @@ use std::str::FromStr;
 
 use winit::window::CursorIcon;
 
-pub fn web_cursor_script(x: f64, y: f64) -> String {
-    format!(
-        r#"(function() {{
-  const x = {x};
-  const y = {y};
-  const el = document.elementFromPoint(x, y);
-  if (!el) return "default";
-  const textTypes = new Set(["", "text", "search", "url", "email", "password", "tel", "number"]);
-  function isTextInput(node) {{
+pub const WEB_CURSOR_BOOTSTRAP: &str = r#"(function() {
+  if (window.__taborCursorProbe) return;
+  const state = window.__taborCursorState || (window.__taborCursorState = {});
+  if (!state.textTypes) {
+    state.textTypes = new Set(["", "text", "search", "url", "email", "password", "tel", "number"]);
+  }
+  state.isTextInput = function(node) {
     if (node.isContentEditable) return true;
     const tag = node.tagName;
     if (tag === "TEXTAREA") return true;
-    if (tag === "INPUT") {{
+    if (tag === "INPUT") {
       const type = (node.getAttribute("type") || "").toLowerCase();
-      return textTypes.has(type);
-    }}
+      return state.textTypes.has(type);
+    }
     if (node.getAttribute && node.getAttribute("role") === "textbox") return true;
     return false;
-  }}
-  function isPointerTarget(node) {{
-    if (node.matches && node.matches("a[href], area[href], button, summary, select, [role='button'], [role='link']")) {{
+  };
+  state.isPointerTarget = function(node) {
+    if (node.matches && node.matches("a[href], area[href], button, summary, select, [role='button'], [role='link']")) {
       return true;
-    }}
-    if (node.tagName === "INPUT") {{
+    }
+    if (node.tagName === "INPUT") {
       const type = (node.getAttribute("type") || "").toLowerCase();
-      return !textTypes.has(type);
-    }}
+      return !state.textTypes.has(type);
+    }
     return false;
-  }}
-  for (let node = el; node; node = node.parentElement) {{
-    const style = window.getComputedStyle(node);
-    if (style && style.cursor && style.cursor !== "auto") {{
-      return style.cursor;
-    }}
-    if (isTextInput(node)) return "text";
-    if (isPointerTarget(node)) return "pointer";
-  }}
-  return "default";
+  };
+  window.__taborCursorProbe = function(x, y) {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return "default";
+    for (let node = el; node; node = node.parentElement) {
+      const style = window.getComputedStyle(node);
+      if (style && style.cursor && style.cursor !== "auto") {
+        return style.cursor;
+      }
+      if (state.isTextInput(node)) return "text";
+      if (state.isPointerTarget(node)) return "pointer";
+    }
+    return "default";
+  };
+})();"#;
+
+pub fn web_cursor_script(x: f64, y: f64) -> String {
+    format!(
+        r#"(() => {{
+  const probe = window.__taborCursorProbe;
+  return probe ? probe({x}, {y}) : "default";
 }})()"#,
         x = x,
         y = y

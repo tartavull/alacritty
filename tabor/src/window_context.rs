@@ -46,8 +46,8 @@ use crate::display::window::Window;
 #[cfg(target_os = "macos")]
 use crate::display::{TabPanelEditOutcome, TabPanelEditTarget};
 use crate::event::{
-    ActionContext, CommandHistory, CommandState, Event, EventProxy, EventType, InlineSearchState,
-    Mouse, SearchState, TouchPurpose,
+    request_web_cursor_update, ActionContext, CommandHistory, CommandState, Event, EventProxy,
+    EventType, InlineSearchState, Mouse, SearchState, TouchPurpose,
 };
 #[cfg(target_os = "macos")]
 use crate::event::WebCommand;
@@ -945,6 +945,8 @@ impl WindowContext {
                     if let WindowKind::Web { url: current_url } = &mut active_tab.kind {
                         *current_url = url.clone();
                     }
+                    active_tab.web_command_state.set_cursor_bootstrapped(false);
+                    active_tab.web_command_state.clear_last_cursor_request();
                     active_tab.favicon = None;
                     active_tab.favicon_pending = false;
                     favicon_cleared = true;
@@ -1090,6 +1092,43 @@ impl WindowContext {
         if Some(tab_id) == self.tabs.active_id() {
             self.display.window.set_mouse_cursor(cursor);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn handle_web_cursor_request(
+        &mut self,
+        tab_id: TabId,
+        event_proxy: &EventLoopProxy<Event>,
+        scheduler: &mut Scheduler,
+    ) {
+        if Some(tab_id) != self.tabs.active_id() {
+            return;
+        }
+
+        let Some(tab) = self.tabs.get_mut(tab_id) else {
+            return;
+        };
+        if !tab.kind.is_web() {
+            return;
+        }
+
+        let Some(position) = tab.web_command_state.last_cursor_pos() else {
+            return;
+        };
+        let Some(web_view) = tab.web_view.as_mut() else {
+            return;
+        };
+
+        request_web_cursor_update(
+            web_view,
+            &mut tab.web_command_state,
+            &self.display,
+            position,
+            event_proxy,
+            scheduler,
+            self.display.window.id(),
+            tab_id,
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -1639,6 +1678,14 @@ impl WindowContext {
                             continue;
                         };
                         self.handle_web_cursor(tab_id, *cursor);
+                        continue;
+                    },
+                    #[cfg(target_os = "macos")]
+                    EventType::WebCursorRequest => {
+                        let Some(tab_id) = event.tab_id() else {
+                            continue;
+                        };
+                        self.handle_web_cursor_request(tab_id, event_proxy, scheduler);
                         continue;
                     },
                     EventType::Terminal(term_event) => {

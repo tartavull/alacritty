@@ -79,7 +79,7 @@ use objc2_app_kit::NSEventModifierFlags;
 #[cfg(target_os = "macos")]
 use crate::macos::web_commands::{self, WebActions, WebCommandState, WebHintAction, WebKey};
 #[cfg(target_os = "macos")]
-use crate::macos::web_cursor::{web_cursor_from_css, web_cursor_script};
+use crate::macos::web_cursor::{web_cursor_from_css, web_cursor_script, WEB_CURSOR_BOOTSTRAP};
 #[cfg(target_os = "macos")]
 use crate::macos::favicon::FaviconImage;
 #[cfg(target_os = "macos")]
@@ -224,6 +224,9 @@ Misc:
   m/`        set/jump mark
   ?          help
 </pre>"#;
+
+#[cfg(target_os = "macos")]
+const WEB_CURSOR_THROTTLE: Duration = Duration::from_millis(100);
 
 /// Maximum number of lines for the blocking search while still typing the search regex.
 const MAX_SEARCH_WHILE_TYPING: Option<usize> = Some(1000);
@@ -887,6 +890,8 @@ pub enum EventType {
     #[cfg(target_os = "macos")]
     WebCursor { cursor: Option<CursorIcon> },
     #[cfg(target_os = "macos")]
+    WebCursorRequest,
+    #[cfg(target_os = "macos")]
     CloseTab(TabId),
     #[cfg(target_os = "macos")]
     RestoreTab,
@@ -1168,6 +1173,72 @@ pub struct ActionContext<'a, N, T> {
     pub shell_pid: u32,
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn request_web_cursor_update(
+    web_view: &mut WebView,
+    web_command_state: &mut WebCommandState,
+    display: &Display,
+    position: PhysicalPosition<f64>,
+    event_proxy: &EventLoopProxy<Event>,
+    scheduler: &mut Scheduler,
+    window_id: WindowId,
+    tab_id: TabId,
+) {
+    web_command_state.set_last_cursor_pos(position);
+
+    let scale_factor = display.window.scale_factor as f64;
+    let size_info = display.size_info;
+    let origin_x = f64::from(size_info.padding_x()) / scale_factor;
+    let origin_y = f64::from(size_info.padding_y()) / scale_factor;
+    let width = f64::from(size_info.width() - size_info.padding_x() - size_info.padding_right())
+        / scale_factor;
+    let height = f64::from(size_info.cell_height() * size_info.screen_lines() as f32)
+        / scale_factor;
+
+    let local_x = position.x / scale_factor - origin_x;
+    let local_y = position.y / scale_factor - origin_y;
+
+    if local_x < 0.0 || local_y < 0.0 || local_x >= width || local_y >= height {
+        return;
+    }
+
+    if web_command_state.cursor_pending() {
+        return;
+    }
+
+    let now = Instant::now();
+    let timer_id = TimerId::new(Topic::WebCursor, window_id);
+    if let Some(last_request) = web_command_state.last_cursor_request() {
+        let elapsed = now.saturating_duration_since(last_request);
+        if elapsed < WEB_CURSOR_THROTTLE {
+            let delay = WEB_CURSOR_THROTTLE - elapsed;
+            let event = Event::for_tab(EventType::WebCursorRequest, window_id, tab_id);
+            scheduler.unschedule(timer_id);
+            scheduler.schedule(event, delay, false, timer_id);
+            return;
+        }
+    }
+
+    scheduler.unschedule(timer_id);
+
+    if !web_command_state.cursor_bootstrapped() {
+        web_view.exec_js(WEB_CURSOR_BOOTSTRAP);
+        web_command_state.set_cursor_bootstrapped(true);
+    }
+
+    web_command_state.set_cursor_pending(true);
+    web_command_state.set_last_cursor_request(now);
+
+    let proxy = event_proxy.clone();
+    let script = web_cursor_script(local_x, local_y);
+
+    web_view.eval_js_string(&script, move |result| {
+        let cursor = result.as_deref().and_then(web_cursor_from_css);
+        let event = Event::for_tab(EventType::WebCursor { cursor }, window_id, tab_id);
+        let _ = proxy.send_event(event);
+    });
+}
+
 impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionContext<'a, N, T> {
     #[inline]
     fn write_to_pty<B: Into<Cow<'static, [u8]>>>(&self, val: B) {
@@ -1350,40 +1421,16 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             return;
         };
 
-        self.web_command_state.set_last_cursor_pos(position);
-
-        if self.web_command_state.cursor_pending() {
-            return;
-        }
-
-        let scale_factor = self.display.window.scale_factor as f64;
-        let size_info = self.display.size_info;
-        let origin_x = f64::from(size_info.padding_x()) / scale_factor;
-        let origin_y = f64::from(size_info.padding_y()) / scale_factor;
-        let width = f64::from(size_info.width() - size_info.padding_x() - size_info.padding_right())
-            / scale_factor;
-        let height =
-            f64::from(size_info.cell_height() * size_info.screen_lines() as f32) / scale_factor;
-
-        let local_x = position.x / scale_factor - origin_x;
-        let local_y = position.y / scale_factor - origin_y;
-
-        if local_x < 0.0 || local_y < 0.0 || local_x >= width || local_y >= height {
-            return;
-        }
-
-        self.web_command_state.set_cursor_pending(true);
-
-        let window_id = self.display.window.id();
-        let tab_id = self.tab_id;
-        let proxy = self.event_proxy.clone();
-        let script = web_cursor_script(local_x, local_y);
-
-        web_view.eval_js_string(&script, move |result| {
-            let cursor = result.as_deref().and_then(web_cursor_from_css);
-            let event = Event::for_tab(EventType::WebCursor { cursor }, window_id, tab_id);
-            let _ = proxy.send_event(event);
-        });
+        request_web_cursor_update(
+            web_view,
+            self.web_command_state,
+            &self.display,
+            position,
+            self.event_proxy,
+            self.scheduler,
+            self.display.window.id(),
+            self.tab_id,
+        );
     }
 
     fn spawn_new_instance(&mut self) {
@@ -2647,6 +2694,8 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
                 #[cfg(target_os = "macos")]
                 if let Some(web_view) = self.web_view.as_mut() {
                     web_view.reload();
+                    self.web_command_state.set_cursor_bootstrapped(false);
+                    self.web_command_state.clear_last_cursor_request();
                     self.display.pending_update.dirty = true;
                     self.display.damage_tracker.frame().mark_fully_damaged();
                     *self.dirty = true;
@@ -3559,6 +3608,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 | EventType::RestoreTab
                 | EventType::WebFavicon { .. }
                 | EventType::WebCursor { .. }
+                | EventType::WebCursorRequest
                 | EventType::TabSearch(_)
                 | EventType::Frame => (),
                 #[cfg(not(target_os = "macos"))]

@@ -30,6 +30,7 @@ pub enum Topic {
     BlinkTimeout,
     ForegroundProcess,
     TabActivityTick,
+    WebCursor,
     Frame,
 }
 

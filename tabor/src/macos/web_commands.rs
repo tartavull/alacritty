@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 use winit::dpi::PhysicalPosition;
 use winit::window::CursorIcon;
 
@@ -76,6 +77,8 @@ pub struct WebCommandState {
     cursor_pending: bool,
     last_cursor: Option<CursorIcon>,
     last_cursor_pos: Option<PhysicalPosition<f64>>,
+    cursor_bootstrapped: bool,
+    last_cursor_request: Option<Instant>,
 }
 
 impl WebCommandState {
@@ -147,6 +150,25 @@ impl WebCommandState {
         self.last_cursor_pos
     }
 
+    pub(crate) fn cursor_bootstrapped(&self) -> bool {
+        self.cursor_bootstrapped
+    }
+
+    pub(crate) fn set_cursor_bootstrapped(&mut self, bootstrapped: bool) {
+        self.cursor_bootstrapped = bootstrapped;
+    }
+
+    pub(crate) fn last_cursor_request(&self) -> Option<Instant> {
+        self.last_cursor_request
+    }
+
+    pub(crate) fn set_last_cursor_request(&mut self, instant: Instant) {
+        self.last_cursor_request = Some(instant);
+    }
+
+    pub(crate) fn clear_last_cursor_request(&mut self) {
+        self.last_cursor_request = None;
+    }
 }
 
 impl Default for WebCommandState {
@@ -163,6 +185,8 @@ impl Default for WebCommandState {
             cursor_pending: false,
             last_cursor: None,
             last_cursor_pos: None,
+            cursor_bootstrapped: false,
+            last_cursor_request: None,
         }
     }
 }
