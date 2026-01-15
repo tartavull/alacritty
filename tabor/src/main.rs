@@ -58,13 +58,24 @@ mod gl {
 }
 
 #[cfg(unix)]
-use crate::cli::MessageOptions;
+use crate::cli::{
+    MessageOptions, MsgCloseTab, MsgCreateGroup, MsgCreateTab, MsgDispatchAction, MsgGetTabState,
+    MsgInspector, MsgInspectorAttach, MsgInspectorDetach, MsgInspectorPoll, MsgInspectorSend,
+    MsgMoveTab, MsgOpenInspector, MsgOpenUrl, MsgReloadWeb, MsgRunCommandBar, MsgSelectTab,
+    MsgSendInput, MsgSetGroupName, MsgSetTabPanel, MsgSetTabTitle, MsgSetWebUrl, TabIdArg,
+};
+#[cfg(unix)]
+use crate::cli::WindowOptions;
 use crate::cli::{Options, Subcommands};
 use crate::config::UiConfig;
+#[cfg(unix)]
+use crate::config::ui_config::Program;
 use crate::config::monitor::ConfigMonitor;
 use crate::event::{Event, Processor};
 #[cfg(target_os = "macos")]
 use crate::macos::locale;
+#[cfg(unix)]
+use crate::window_kind::WindowKind;
 
 fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(windows)]
@@ -95,15 +106,39 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(unix)]
 #[allow(unused_mut)]
 fn msg(mut options: MessageOptions) -> Result<(), Box<dyn Error>> {
+    fn ipc_tab_id(tab_id: TabIdArg) -> ipc::IpcTabId {
+        ipc::IpcTabId { index: tab_id.index, generation: tab_id.generation }
+    }
+
+    fn print_reply(reply: Option<ipc::SocketReply>) -> Result<(), Box<dyn Error>> {
+        if let Some(reply) = reply {
+            println!("{}", serde_json::to_string(&reply)?);
+            if let ipc::SocketReply::Error { error } = reply {
+                return Err(error.message.into());
+            }
+        }
+        Ok(())
+    }
+
+    fn send_request(
+        socket: &Option<PathBuf>,
+        request: ipc::IpcRequest,
+    ) -> Result<(), Box<dyn Error>> {
+        let reply = ipc::send_message(socket.clone(), request)?;
+        print_reply(reply)
+    }
+
+    let socket = options.socket.clone();
+
     match options.message {
         crate::cli::MessageCommand::Config(config) => {
-            let reply = ipc::send_message(options.socket, ipc::IpcRequest::SetConfig(config))?;
+            let reply = ipc::send_message(socket.clone(), ipc::IpcRequest::SetConfig(config))?;
             if let Some(ipc::SocketReply::Error { error }) = reply {
                 return Err(error.message.into());
             }
         },
         crate::cli::MessageCommand::GetConfig(config) => {
-            let reply = ipc::send_message(options.socket, ipc::IpcRequest::GetConfig(config))?;
+            let reply = ipc::send_message(socket.clone(), ipc::IpcRequest::GetConfig(config))?;
             match reply {
                 Some(ipc::SocketReply::Config { config }) => {
                     println!("{}", serde_json::to_string(&config)?);
@@ -114,11 +149,269 @@ fn msg(mut options: MessageOptions) -> Result<(), Box<dyn Error>> {
                 _ => (),
             }
         },
+        crate::cli::MessageCommand::Ping => {
+            send_request(&socket, ipc::IpcRequest::Ping)?;
+        },
+        crate::cli::MessageCommand::GetCapabilities => {
+            send_request(&socket, ipc::IpcRequest::GetCapabilities)?;
+        },
+        crate::cli::MessageCommand::ListTabs => {
+            send_request(&socket, ipc::IpcRequest::ListTabs)?;
+        },
+        crate::cli::MessageCommand::GetTabState(MsgGetTabState { tab_id }) => {
+            send_request(
+                &socket,
+                ipc::IpcRequest::GetTabState {
+                    tab_id: ipc_tab_id(tab_id),
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::CreateTab(MsgCreateTab {
+            web,
+            group_id,
+            group_name,
+            terminal_options,
+            window_identity,
+        }) => {
+            let mut tab_options = WindowOptions::default();
+            tab_options.terminal_options = terminal_options;
+            tab_options.window_identity = window_identity;
+            tab_options.window_kind = match web {
+                Some(url) => WindowKind::Web { url },
+                None => WindowKind::Terminal,
+            };
+            send_request(
+                &socket,
+                ipc::IpcRequest::CreateTab {
+                    options: tab_options,
+                    group_id,
+                    group_name,
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::CreateGroup(MsgCreateGroup { name }) => {
+            send_request(&socket, ipc::IpcRequest::CreateGroup { name })?;
+        },
+        crate::cli::MessageCommand::CloseTab(MsgCloseTab { tab_id }) => {
+            send_request(
+                &socket,
+                ipc::IpcRequest::CloseTab {
+                    tab_id: tab_id.map(ipc_tab_id),
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::SelectTab(MsgSelectTab {
+            active,
+            next,
+            previous,
+            last,
+            index,
+            tab_id,
+        }) => {
+            let selection = if active {
+                ipc::TabSelection::Active
+            } else if next {
+                ipc::TabSelection::Next
+            } else if previous {
+                ipc::TabSelection::Previous
+            } else if last {
+                ipc::TabSelection::Last
+            } else if let Some(index) = index {
+                ipc::TabSelection::ByIndex { index }
+            } else {
+                ipc::TabSelection::ById { tab_id: ipc_tab_id(tab_id.expect("tab id")) }
+            };
+            send_request(&socket, ipc::IpcRequest::SelectTab { selection })?;
+        },
+        crate::cli::MessageCommand::MoveTab(MsgMoveTab {
+            tab_id,
+            target_group_id,
+            target_index,
+        }) => {
+            send_request(
+                &socket,
+                ipc::IpcRequest::MoveTab {
+                    tab_id: ipc_tab_id(tab_id),
+                    target_group_id,
+                    target_index,
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::SetTabTitle(MsgSetTabTitle { tab_id, title, clear }) => {
+            let title = if clear { None } else { title };
+            send_request(
+                &socket,
+                ipc::IpcRequest::SetTabTitle {
+                    tab_id: tab_id.map(ipc_tab_id),
+                    title,
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::SetGroupName(MsgSetGroupName { group_id, name, clear }) => {
+            let name = if clear { None } else { name };
+            send_request(
+                &socket,
+                ipc::IpcRequest::SetGroupName { group_id, name },
+            )?;
+        },
+        crate::cli::MessageCommand::RestoreClosedTab => {
+            send_request(&socket, ipc::IpcRequest::RestoreClosedTab)?;
+        },
+        crate::cli::MessageCommand::OpenUrl(MsgOpenUrl { url, new_tab, tab_id }) => {
+            let target = if new_tab {
+                ipc::UrlTarget::NewTab
+            } else if let Some(tab_id) = tab_id {
+                ipc::UrlTarget::TabId { tab_id: ipc_tab_id(tab_id) }
+            } else {
+                ipc::UrlTarget::Current
+            };
+            send_request(&socket, ipc::IpcRequest::OpenUrl { url, target })?;
+        },
+        crate::cli::MessageCommand::SetWebUrl(MsgSetWebUrl { url, tab_id }) => {
+            send_request(
+                &socket,
+                ipc::IpcRequest::SetWebUrl {
+                    tab_id: tab_id.map(ipc_tab_id),
+                    url,
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::ReloadWeb(MsgReloadWeb { tab_id }) => {
+            send_request(
+                &socket,
+                ipc::IpcRequest::ReloadWeb {
+                    tab_id: tab_id.map(ipc_tab_id),
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::OpenInspector(MsgOpenInspector { tab_id }) => {
+            send_request(
+                &socket,
+                ipc::IpcRequest::OpenInspector {
+                    tab_id: tab_id.map(ipc_tab_id),
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::GetTabPanel => {
+            send_request(&socket, ipc::IpcRequest::GetTabPanel)?;
+        },
+        crate::cli::MessageCommand::SetTabPanel(MsgSetTabPanel {
+            enable,
+            disable,
+            width,
+        }) => {
+            let enabled = if enable {
+                Some(true)
+            } else if disable {
+                Some(false)
+            } else {
+                None
+            };
+            send_request(&socket, ipc::IpcRequest::SetTabPanel { enabled, width })?;
+        },
+        crate::cli::MessageCommand::DispatchAction(MsgDispatchAction {
+            tab_id,
+            action,
+            vi_motion,
+            vi_action,
+            search_action,
+            mouse_action,
+            esc,
+            command,
+        }) => {
+            let action = if let Some(name) = action {
+                ipc::IpcAction::Action { name }
+            } else if let Some(motion) = vi_motion {
+                ipc::IpcAction::ViMotion { motion }
+            } else if let Some(action) = vi_action {
+                ipc::IpcAction::ViAction { action }
+            } else if let Some(action) = search_action {
+                ipc::IpcAction::SearchAction { action }
+            } else if let Some(action) = mouse_action {
+                ipc::IpcAction::MouseAction { action }
+            } else if let Some(sequence) = esc {
+                ipc::IpcAction::Esc { sequence }
+            } else if let Some(command) = command {
+                let (program, args) = command.split_first().expect("command");
+                let program = if args.is_empty() {
+                    Program::Just(program.clone())
+                } else {
+                    Program::WithArgs {
+                        program: program.clone(),
+                        args: args.to_vec(),
+                    }
+                };
+                ipc::IpcAction::Command { program }
+            } else {
+                return Err("No action provided".into());
+            };
+            send_request(
+                &socket,
+                ipc::IpcRequest::DispatchAction {
+                    tab_id: tab_id.map(ipc_tab_id),
+                    action,
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::SendInput(MsgSendInput { text, tab_id }) => {
+            send_request(
+                &socket,
+                ipc::IpcRequest::SendInput {
+                    tab_id: tab_id.map(ipc_tab_id),
+                    text,
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::RunCommandBar(MsgRunCommandBar { input, tab_id }) => {
+            send_request(
+                &socket,
+                ipc::IpcRequest::RunCommandBar {
+                    tab_id: tab_id.map(ipc_tab_id),
+                    input,
+                },
+            )?;
+        },
+        crate::cli::MessageCommand::Inspector { command } => match command {
+            MsgInspector::ListTargets => {
+                send_request(&socket, ipc::IpcRequest::ListInspectorTargets)?;
+            },
+            MsgInspector::Attach(MsgInspectorAttach { tab_id, target_id }) => {
+                send_request(
+                    &socket,
+                    ipc::IpcRequest::AttachInspector {
+                        tab_id: tab_id.map(ipc_tab_id),
+                        target_id,
+                    },
+                )?;
+            },
+            MsgInspector::Detach(MsgInspectorDetach { session_id }) => {
+                send_request(&socket, ipc::IpcRequest::DetachInspector { session_id })?;
+            },
+            MsgInspector::Send(MsgInspectorSend { session_id, message }) => {
+                send_request(
+                    &socket,
+                    ipc::IpcRequest::SendInspectorMessage { session_id, message },
+                )?;
+            },
+            MsgInspector::Poll(MsgInspectorPoll { session_id, max }) => {
+                send_request(
+                    &socket,
+                    ipc::IpcRequest::PollInspectorMessages { session_id, max },
+                )?;
+            },
+        },
         crate::cli::MessageCommand::Send { json } => {
-            let reply = ipc::send_raw_message(options.socket, &json)?;
+            let reply = ipc::send_raw_message(socket, &json)?;
             if let Some(reply) = reply {
                 println!("{}", serde_json::to_string(&reply)?);
             }
+        },
+        crate::cli::MessageCommand::ListRequests => {
+            println!("Available IPC request types:");
+            for entry in ipc::ipc_request_help() {
+                println!("{:<24} {}", entry.name, entry.summary);
+            }
+            println!("\nSee docs/ipc.md for full request schemas and examples.");
         },
     }
 

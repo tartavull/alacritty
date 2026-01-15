@@ -88,6 +88,6 @@ action.
 ## IPC and automation
 
 Tabor exposes a local IPC socket for scripting tab management, actions, and web
-automation. Use `tabor msg send` to post JSON requests and read responses. The
-full protocol, including Remote Inspector commands, is documented in
-[`docs/ipc.md`](./ipc.md).
+automation. Use `tabor msg` typed subcommands (for example, `tabor msg list-tabs`)
+or `tabor msg send` for raw JSON. The full protocol, including Remote Inspector
+commands, is documented in [`docs/ipc.md`](./ipc.md).

@@ -2,6 +2,20 @@
 
 Tabor exposes a local Unix socket for automation. Messages are single-line JSON
 objects with a required `type` field. Use `tabor msg send` to send raw JSON.
+For a quick list of request types, run `tabor msg list-requests`.
+
+## CLI shortcuts
+
+`tabor msg` includes typed subcommands that map 1:1 to IPC requests. Run
+`tabor msg --help` for the full list and `tabor msg <command> --help` for
+flags. Tab ids are passed as `<index>:<generation>`.
+
+Examples:
+- `tabor msg list-tabs`
+- `tabor msg get-tab-state --tab-id 1:1`
+- `tabor msg open-url https://example.com --new-tab`
+- `tabor msg reload-web --tab-id 1:1`
+- `tabor msg inspector list-targets`
 
 ## Transport
 
@@ -78,10 +92,18 @@ Reply: `{"type":"tab_state","tab":{...}}`
 ### create_tab
 Request:
 ```json
-{"type":"create_tab","options":{"terminal_options":{},"window_identity":{},"window_kind":{"kind":"terminal"}}}
+{"type":"create_tab","options":{"terminal_options":{},"window_identity":{},"window_kind":{"kind":"terminal"}},"group_id":2}
 ```
 Reply: `{"type":"tab_created","tab_id":{"index":2,"generation":1}}`
 `window_kind` values are `{"kind":"terminal"}` or `{"kind":"web","url":"https://example.com"}`.
+`group_id` or `group_name` can be provided to place the new tab into a specific group.
+
+### create_group
+Request:
+```json
+{"type":"create_group","name":"notifications"}
+```
+Reply: `{"type":"group_created","group_id":4}`
 
 ### close_tab
 Request:

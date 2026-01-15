@@ -16,7 +16,7 @@ _tabor() {
     local context curcontext="$curcontext" state line
     _arguments "${_arguments_options[@]}" : \
 '--embed=[X11 window ID to embed Tabor within (decimal or hexadecimal with "0x" prefix)]:EMBED:_default' \
-'--config-file=[Specify alternative configuration file \[default\: \$XDG_CONFIG_HOME/tabor/tabor.toml\]]:CONFIG_FILE:_files' \
+'--config-file=[Specify alternative configuration file \[default\: \$HOME/.config/tabor/tabor.toml\]]:CONFIG_FILE:_files' \
 '--socket=[Path for IPC socket creation]:SOCKET:_files' \
 '--working-directory=[Start the shell in the specified working directory]:WORKING_DIRECTORY:_files' \
 '*-e+[Command and args to execute (must be last argument)]:COMMAND:_default' \
@@ -61,7 +61,7 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:tabor-msg-command-$line[1]:"
         case $line[1] in
-(config)
+            (config)
 _arguments "${_arguments_options[@]}" : \
 '-w+[Window ID for the new config]:WINDOW_ID:_default' \
 '--window-id=[Window ID for the new config]:WINDOW_ID:_default' \
@@ -80,11 +80,288 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(ping)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(get-capabilities)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(list-tabs)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(get-tab-state)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation>]:INDEX:GEN:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create-tab)
+_arguments "${_arguments_options[@]}" : \
+'--web=[Create a web tab with the provided URL]:URL:_default' \
+'(--group-name)--group-id=[Target group id for the new tab]:GROUP_ID:_default' \
+'(--group-id)--group-name=[Target group name for the new tab]:NAME:_default' \
+'--working-directory=[Start the shell in the specified working directory]:WORKING_DIRECTORY:_files' \
+'*-e+[Command and args to execute (must be last argument)]:COMMAND:_default' \
+'*--command=[Command and args to execute (must be last argument)]:COMMAND:_default' \
+'-T+[Defines the window title \[default\: Tabor\]]:TITLE:_default' \
+'--title=[Defines the window title \[default\: Tabor\]]:TITLE:_default' \
+'--class=[Defines window class/app_id on X11/Wayland \[default\: Tabor\]]:general> | <general>,<instance:_default' \
+'--hold[Remain open after child process exit]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create-group)
+_arguments "${_arguments_options[@]}" : \
+'--name=[Optional name for the new group]:NAME:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(close-tab)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation>]:INDEX:GEN:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(select-tab)
+_arguments "${_arguments_options[@]}" : \
+'--index=[]:INDEX:_default' \
+'--tab-id=[Tab id formatted as <index>\:<generation>]:INDEX:GEN:_default' \
+'--active[]' \
+'--next[]' \
+'--previous[]' \
+'--last[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(move-tab)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation>]:INDEX:GEN:_default' \
+'--target-group-id=[]:GROUP_ID:_default' \
+'--target-index=[]:INDEX:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(set-tab-title)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation>]:INDEX:GEN:_default' \
+'--title=[]:TITLE:_default' \
+'(--title)--clear[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(set-group-name)
+_arguments "${_arguments_options[@]}" : \
+'--group-id=[]:GROUP_ID:_default' \
+'--name=[]:NAME:_default' \
+'(--name)--clear[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(restore-closed-tab)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(open-url)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Target tab id formatted as <index>\:<generation>]:INDEX:GEN:_default' \
+'(--tab-id)--new-tab[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':url:_default' \
+&& ret=0
+;;
+(set-web-url)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation> (defaults to active tab)]:INDEX:GEN:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':url:_default' \
+&& ret=0
+;;
+(reload-web)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation> (defaults to active tab)]:INDEX:GEN:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(open-inspector)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation> (defaults to active tab)]:INDEX:GEN:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(get-tab-panel)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(set-tab-panel)
+_arguments "${_arguments_options[@]}" : \
+'--width=[]:WIDTH:_default' \
+'(--disable)--enable[]' \
+'(--enable)--disable[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(dispatch-action)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation> (defaults to active tab)]:INDEX:GEN:_default' \
+'--action=[]:ACTION:_default' \
+'--vi-motion=[]:VI_MOTION:_default' \
+'--vi-action=[]:VI_ACTION:_default' \
+'--search-action=[]:SEARCH_ACTION:_default' \
+'--mouse-action=[]:MOUSE_ACTION:_default' \
+'--esc=[]:ESC:_default' \
+'*--command=[]:COMMAND:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(send-input)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation> (defaults to active tab)]:INDEX:GEN:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':text:_default' \
+&& ret=0
+;;
+(run-command-bar)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation> (defaults to active tab)]:INDEX:GEN:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':input:_default' \
+&& ret=0
+;;
+(inspector)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_tabor__msg__inspector_commands" \
+"*::: :->inspector" \
+&& ret=0
+
+    case $state in
+    (inspector)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:tabor-msg-inspector-command-$line[1]:"
+        case $line[1] in
+            (list-targets)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+'--tab-id=[Tab id formatted as <index>\:<generation>]:INDEX:GEN:_default' \
+'--target-id=[]:TARGET_ID:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--session-id=[]:SESSION_ID:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (send)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-'*::json -- JSON payload to send to the IPC socket:_default' \
+'--session-id=[]:SESSION_ID:_default' \
+'--message=[]:MESSAGE:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(poll)
+_arguments "${_arguments_options[@]}" : \
+'--session-id=[]:SESSION_ID:_default' \
+'--max=[]:MAX:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_tabor__msg__inspector__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:tabor-msg-inspector-help-command-$line[1]:"
+        case $line[1] in
+            (list-targets)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(send)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(poll)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(send)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':json -- JSON payload to send:_default' \
+&& ret=0
+;;
+(list-requests)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
 && ret=0
 ;;
 (help)
@@ -99,7 +376,7 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:tabor-msg-help-command-$line[1]:"
         case $line[1] in
-(config)
+            (config)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -107,7 +384,131 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(ping)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(get-capabilities)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list-tabs)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(get-tab-state)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(create-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(create-group)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(select-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(move-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(set-tab-title)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(set-group-name)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(restore-closed-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(open-url)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(set-web-url)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(reload-web)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(open-inspector)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(get-tab-panel)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(set-tab-panel)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(dispatch-action)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(send-input)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run-command-bar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(inspector)
+_arguments "${_arguments_options[@]}" : \
+":: :_tabor__msg__help__inspector_commands" \
+"*::: :->inspector" \
+&& ret=0
+
+    case $state in
+    (inspector)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:tabor-msg-help-inspector-command-$line[1]:"
+        case $line[1] in
+            (list-targets)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (send)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(poll)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(send)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list-requests)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -170,6 +571,134 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(ping)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(get-capabilities)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list-tabs)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(get-tab-state)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(create-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(create-group)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(select-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(move-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(set-tab-title)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(set-group-name)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(restore-closed-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(open-url)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(set-web-url)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(reload-web)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(open-inspector)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(get-tab-panel)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(set-tab-panel)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(dispatch-action)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(send-input)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run-command-bar)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(inspector)
+_arguments "${_arguments_options[@]}" : \
+":: :_tabor__help__msg__inspector_commands" \
+"*::: :->inspector" \
+&& ret=0
+
+    case $state in
+    (inspector)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:tabor-help-msg-inspector-command-$line[1]:"
+        case $line[1] in
+            (list-targets)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(send)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(poll)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(send)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list-requests)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -224,19 +753,193 @@ _tabor__help__msg_commands() {
     local commands; commands=(
 'config:Update the Tabor configuration' \
 'get-config:Read runtime Tabor configuration' \
-'send:Send a raw JSON IPC message' \
+'ping:Ping the IPC socket' \
+'get-capabilities:List IPC capabilities' \
+'list-tabs:List all tabs' \
+'get-tab-state:Get a single tab state' \
+'create-tab:Create a new tab' \
+'create-group:Create a new tab group' \
+'close-tab:Close a tab (defaults to active)' \
+'select-tab:Select a tab' \
+'move-tab:Move a tab within or across groups' \
+'set-tab-title:Set or clear a tab title' \
+'set-group-name:Set or clear a tab group name' \
+'restore-closed-tab:Restore the most recently closed tab' \
+'open-url:Open a URL in a tab' \
+'set-web-url:Set the URL for a web tab' \
+'reload-web:Reload a web tab' \
+'open-inspector:Open the Web Inspector for a web tab' \
+'get-tab-panel:Get tab panel state' \
+'set-tab-panel:Set tab panel state' \
+'dispatch-action:Dispatch a configured action' \
+'send-input:Send literal input to a tab' \
+'run-command-bar:Run a command in the command bar' \
+'inspector:Web Inspector commands' \
+'send:Send raw JSON IPC message' \
+'list-requests:List available IPC request types' \
     )
     _describe -t commands 'tabor help msg commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__close-tab_commands] )) ||
+_tabor__help__msg__close-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg close-tab commands' commands "$@"
 }
 (( $+functions[_tabor__help__msg__config_commands] )) ||
 _tabor__help__msg__config_commands() {
     local commands; commands=()
     _describe -t commands 'tabor help msg config commands' commands "$@"
 }
+(( $+functions[_tabor__help__msg__create-group_commands] )) ||
+_tabor__help__msg__create-group_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg create-group commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__create-tab_commands] )) ||
+_tabor__help__msg__create-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg create-tab commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__dispatch-action_commands] )) ||
+_tabor__help__msg__dispatch-action_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg dispatch-action commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__get-capabilities_commands] )) ||
+_tabor__help__msg__get-capabilities_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg get-capabilities commands' commands "$@"
+}
 (( $+functions[_tabor__help__msg__get-config_commands] )) ||
 _tabor__help__msg__get-config_commands() {
     local commands; commands=()
     _describe -t commands 'tabor help msg get-config commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__get-tab-panel_commands] )) ||
+_tabor__help__msg__get-tab-panel_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg get-tab-panel commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__get-tab-state_commands] )) ||
+_tabor__help__msg__get-tab-state_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg get-tab-state commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__inspector_commands] )) ||
+_tabor__help__msg__inspector_commands() {
+    local commands; commands=(
+'list-targets:List Web Inspector targets' \
+'attach:Attach to a Web Inspector target' \
+'detach:Detach a Web Inspector session' \
+'send:Send a Web Inspector message' \
+'poll:Poll for Web Inspector messages' \
+    )
+    _describe -t commands 'tabor help msg inspector commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__inspector__attach_commands] )) ||
+_tabor__help__msg__inspector__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg inspector attach commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__inspector__detach_commands] )) ||
+_tabor__help__msg__inspector__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg inspector detach commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__inspector__list-targets_commands] )) ||
+_tabor__help__msg__inspector__list-targets_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg inspector list-targets commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__inspector__poll_commands] )) ||
+_tabor__help__msg__inspector__poll_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg inspector poll commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__inspector__send_commands] )) ||
+_tabor__help__msg__inspector__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg inspector send commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__list-requests_commands] )) ||
+_tabor__help__msg__list-requests_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg list-requests commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__list-tabs_commands] )) ||
+_tabor__help__msg__list-tabs_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg list-tabs commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__move-tab_commands] )) ||
+_tabor__help__msg__move-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg move-tab commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__open-inspector_commands] )) ||
+_tabor__help__msg__open-inspector_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg open-inspector commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__open-url_commands] )) ||
+_tabor__help__msg__open-url_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg open-url commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__ping_commands] )) ||
+_tabor__help__msg__ping_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg ping commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__reload-web_commands] )) ||
+_tabor__help__msg__reload-web_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg reload-web commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__restore-closed-tab_commands] )) ||
+_tabor__help__msg__restore-closed-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg restore-closed-tab commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__run-command-bar_commands] )) ||
+_tabor__help__msg__run-command-bar_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg run-command-bar commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__select-tab_commands] )) ||
+_tabor__help__msg__select-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg select-tab commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__send_commands] )) ||
+_tabor__help__msg__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg send commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__send-input_commands] )) ||
+_tabor__help__msg__send-input_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg send-input commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__set-group-name_commands] )) ||
+_tabor__help__msg__set-group-name_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg set-group-name commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__set-tab-panel_commands] )) ||
+_tabor__help__msg__set-tab-panel_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg set-tab-panel commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__set-tab-title_commands] )) ||
+_tabor__help__msg__set-tab-title_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg set-tab-title commands' commands "$@"
+}
+(( $+functions[_tabor__help__msg__set-web-url_commands] )) ||
+_tabor__help__msg__set-web-url_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor help msg set-web-url commands' commands "$@"
 }
 (( $+functions[_tabor__migrate_commands] )) ||
 _tabor__migrate_commands() {
@@ -248,45 +951,436 @@ _tabor__msg_commands() {
     local commands; commands=(
 'config:Update the Tabor configuration' \
 'get-config:Read runtime Tabor configuration' \
-'send:Send a raw JSON IPC message' \
+'ping:Ping the IPC socket' \
+'get-capabilities:List IPC capabilities' \
+'list-tabs:List all tabs' \
+'get-tab-state:Get a single tab state' \
+'create-tab:Create a new tab' \
+'create-group:Create a new tab group' \
+'close-tab:Close a tab (defaults to active)' \
+'select-tab:Select a tab' \
+'move-tab:Move a tab within or across groups' \
+'set-tab-title:Set or clear a tab title' \
+'set-group-name:Set or clear a tab group name' \
+'restore-closed-tab:Restore the most recently closed tab' \
+'open-url:Open a URL in a tab' \
+'set-web-url:Set the URL for a web tab' \
+'reload-web:Reload a web tab' \
+'open-inspector:Open the Web Inspector for a web tab' \
+'get-tab-panel:Get tab panel state' \
+'set-tab-panel:Set tab panel state' \
+'dispatch-action:Dispatch a configured action' \
+'send-input:Send literal input to a tab' \
+'run-command-bar:Run a command in the command bar' \
+'inspector:Web Inspector commands' \
+'send:Send raw JSON IPC message' \
+'list-requests:List available IPC request types' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'tabor msg commands' commands "$@"
+}
+(( $+functions[_tabor__msg__close-tab_commands] )) ||
+_tabor__msg__close-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg close-tab commands' commands "$@"
 }
 (( $+functions[_tabor__msg__config_commands] )) ||
 _tabor__msg__config_commands() {
     local commands; commands=()
     _describe -t commands 'tabor msg config commands' commands "$@"
 }
+(( $+functions[_tabor__msg__create-group_commands] )) ||
+_tabor__msg__create-group_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg create-group commands' commands "$@"
+}
+(( $+functions[_tabor__msg__create-tab_commands] )) ||
+_tabor__msg__create-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg create-tab commands' commands "$@"
+}
+(( $+functions[_tabor__msg__dispatch-action_commands] )) ||
+_tabor__msg__dispatch-action_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg dispatch-action commands' commands "$@"
+}
+(( $+functions[_tabor__msg__get-capabilities_commands] )) ||
+_tabor__msg__get-capabilities_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg get-capabilities commands' commands "$@"
+}
 (( $+functions[_tabor__msg__get-config_commands] )) ||
 _tabor__msg__get-config_commands() {
     local commands; commands=()
     _describe -t commands 'tabor msg get-config commands' commands "$@"
+}
+(( $+functions[_tabor__msg__get-tab-panel_commands] )) ||
+_tabor__msg__get-tab-panel_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg get-tab-panel commands' commands "$@"
+}
+(( $+functions[_tabor__msg__get-tab-state_commands] )) ||
+_tabor__msg__get-tab-state_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg get-tab-state commands' commands "$@"
 }
 (( $+functions[_tabor__msg__help_commands] )) ||
 _tabor__msg__help_commands() {
     local commands; commands=(
 'config:Update the Tabor configuration' \
 'get-config:Read runtime Tabor configuration' \
-'send:Send a raw JSON IPC message' \
+'ping:Ping the IPC socket' \
+'get-capabilities:List IPC capabilities' \
+'list-tabs:List all tabs' \
+'get-tab-state:Get a single tab state' \
+'create-tab:Create a new tab' \
+'create-group:Create a new tab group' \
+'close-tab:Close a tab (defaults to active)' \
+'select-tab:Select a tab' \
+'move-tab:Move a tab within or across groups' \
+'set-tab-title:Set or clear a tab title' \
+'set-group-name:Set or clear a tab group name' \
+'restore-closed-tab:Restore the most recently closed tab' \
+'open-url:Open a URL in a tab' \
+'set-web-url:Set the URL for a web tab' \
+'reload-web:Reload a web tab' \
+'open-inspector:Open the Web Inspector for a web tab' \
+'get-tab-panel:Get tab panel state' \
+'set-tab-panel:Set tab panel state' \
+'dispatch-action:Dispatch a configured action' \
+'send-input:Send literal input to a tab' \
+'run-command-bar:Run a command in the command bar' \
+'inspector:Web Inspector commands' \
+'send:Send raw JSON IPC message' \
+'list-requests:List available IPC request types' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'tabor msg help commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__close-tab_commands] )) ||
+_tabor__msg__help__close-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help close-tab commands' commands "$@"
 }
 (( $+functions[_tabor__msg__help__config_commands] )) ||
 _tabor__msg__help__config_commands() {
     local commands; commands=()
     _describe -t commands 'tabor msg help config commands' commands "$@"
 }
+(( $+functions[_tabor__msg__help__create-group_commands] )) ||
+_tabor__msg__help__create-group_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help create-group commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__create-tab_commands] )) ||
+_tabor__msg__help__create-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help create-tab commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__dispatch-action_commands] )) ||
+_tabor__msg__help__dispatch-action_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help dispatch-action commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__get-capabilities_commands] )) ||
+_tabor__msg__help__get-capabilities_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help get-capabilities commands' commands "$@"
+}
 (( $+functions[_tabor__msg__help__get-config_commands] )) ||
 _tabor__msg__help__get-config_commands() {
     local commands; commands=()
     _describe -t commands 'tabor msg help get-config commands' commands "$@"
 }
+(( $+functions[_tabor__msg__help__get-tab-panel_commands] )) ||
+_tabor__msg__help__get-tab-panel_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help get-tab-panel commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__get-tab-state_commands] )) ||
+_tabor__msg__help__get-tab-state_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help get-tab-state commands' commands "$@"
+}
 (( $+functions[_tabor__msg__help__help_commands] )) ||
 _tabor__msg__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'tabor msg help help commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__inspector_commands] )) ||
+_tabor__msg__help__inspector_commands() {
+    local commands; commands=(
+'list-targets:List Web Inspector targets' \
+'attach:Attach to a Web Inspector target' \
+'detach:Detach a Web Inspector session' \
+'send:Send a Web Inspector message' \
+'poll:Poll for Web Inspector messages' \
+    )
+    _describe -t commands 'tabor msg help inspector commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__inspector__attach_commands] )) ||
+_tabor__msg__help__inspector__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help inspector attach commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__inspector__detach_commands] )) ||
+_tabor__msg__help__inspector__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help inspector detach commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__inspector__list-targets_commands] )) ||
+_tabor__msg__help__inspector__list-targets_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help inspector list-targets commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__inspector__poll_commands] )) ||
+_tabor__msg__help__inspector__poll_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help inspector poll commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__inspector__send_commands] )) ||
+_tabor__msg__help__inspector__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help inspector send commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__list-requests_commands] )) ||
+_tabor__msg__help__list-requests_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help list-requests commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__list-tabs_commands] )) ||
+_tabor__msg__help__list-tabs_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help list-tabs commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__move-tab_commands] )) ||
+_tabor__msg__help__move-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help move-tab commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__open-inspector_commands] )) ||
+_tabor__msg__help__open-inspector_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help open-inspector commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__open-url_commands] )) ||
+_tabor__msg__help__open-url_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help open-url commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__ping_commands] )) ||
+_tabor__msg__help__ping_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help ping commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__reload-web_commands] )) ||
+_tabor__msg__help__reload-web_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help reload-web commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__restore-closed-tab_commands] )) ||
+_tabor__msg__help__restore-closed-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help restore-closed-tab commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__run-command-bar_commands] )) ||
+_tabor__msg__help__run-command-bar_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help run-command-bar commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__select-tab_commands] )) ||
+_tabor__msg__help__select-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help select-tab commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__send_commands] )) ||
+_tabor__msg__help__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help send commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__send-input_commands] )) ||
+_tabor__msg__help__send-input_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help send-input commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__set-group-name_commands] )) ||
+_tabor__msg__help__set-group-name_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help set-group-name commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__set-tab-panel_commands] )) ||
+_tabor__msg__help__set-tab-panel_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help set-tab-panel commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__set-tab-title_commands] )) ||
+_tabor__msg__help__set-tab-title_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help set-tab-title commands' commands "$@"
+}
+(( $+functions[_tabor__msg__help__set-web-url_commands] )) ||
+_tabor__msg__help__set-web-url_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg help set-web-url commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector_commands] )) ||
+_tabor__msg__inspector_commands() {
+    local commands; commands=(
+'list-targets:List Web Inspector targets' \
+'attach:Attach to a Web Inspector target' \
+'detach:Detach a Web Inspector session' \
+'send:Send a Web Inspector message' \
+'poll:Poll for Web Inspector messages' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'tabor msg inspector commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__attach_commands] )) ||
+_tabor__msg__inspector__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector attach commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__detach_commands] )) ||
+_tabor__msg__inspector__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector detach commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__help_commands] )) ||
+_tabor__msg__inspector__help_commands() {
+    local commands; commands=(
+'list-targets:List Web Inspector targets' \
+'attach:Attach to a Web Inspector target' \
+'detach:Detach a Web Inspector session' \
+'send:Send a Web Inspector message' \
+'poll:Poll for Web Inspector messages' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'tabor msg inspector help commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__help__attach_commands] )) ||
+_tabor__msg__inspector__help__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector help attach commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__help__detach_commands] )) ||
+_tabor__msg__inspector__help__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector help detach commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__help__help_commands] )) ||
+_tabor__msg__inspector__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector help help commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__help__list-targets_commands] )) ||
+_tabor__msg__inspector__help__list-targets_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector help list-targets commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__help__poll_commands] )) ||
+_tabor__msg__inspector__help__poll_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector help poll commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__help__send_commands] )) ||
+_tabor__msg__inspector__help__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector help send commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__list-targets_commands] )) ||
+_tabor__msg__inspector__list-targets_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector list-targets commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__poll_commands] )) ||
+_tabor__msg__inspector__poll_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector poll commands' commands "$@"
+}
+(( $+functions[_tabor__msg__inspector__send_commands] )) ||
+_tabor__msg__inspector__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg inspector send commands' commands "$@"
+}
+(( $+functions[_tabor__msg__list-requests_commands] )) ||
+_tabor__msg__list-requests_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg list-requests commands' commands "$@"
+}
+(( $+functions[_tabor__msg__list-tabs_commands] )) ||
+_tabor__msg__list-tabs_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg list-tabs commands' commands "$@"
+}
+(( $+functions[_tabor__msg__move-tab_commands] )) ||
+_tabor__msg__move-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg move-tab commands' commands "$@"
+}
+(( $+functions[_tabor__msg__open-inspector_commands] )) ||
+_tabor__msg__open-inspector_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg open-inspector commands' commands "$@"
+}
+(( $+functions[_tabor__msg__open-url_commands] )) ||
+_tabor__msg__open-url_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg open-url commands' commands "$@"
+}
+(( $+functions[_tabor__msg__ping_commands] )) ||
+_tabor__msg__ping_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg ping commands' commands "$@"
+}
+(( $+functions[_tabor__msg__reload-web_commands] )) ||
+_tabor__msg__reload-web_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg reload-web commands' commands "$@"
+}
+(( $+functions[_tabor__msg__restore-closed-tab_commands] )) ||
+_tabor__msg__restore-closed-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg restore-closed-tab commands' commands "$@"
+}
+(( $+functions[_tabor__msg__run-command-bar_commands] )) ||
+_tabor__msg__run-command-bar_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg run-command-bar commands' commands "$@"
+}
+(( $+functions[_tabor__msg__select-tab_commands] )) ||
+_tabor__msg__select-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg select-tab commands' commands "$@"
+}
+(( $+functions[_tabor__msg__send_commands] )) ||
+_tabor__msg__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg send commands' commands "$@"
+}
+(( $+functions[_tabor__msg__send-input_commands] )) ||
+_tabor__msg__send-input_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg send-input commands' commands "$@"
+}
+(( $+functions[_tabor__msg__set-group-name_commands] )) ||
+_tabor__msg__set-group-name_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg set-group-name commands' commands "$@"
+}
+(( $+functions[_tabor__msg__set-tab-panel_commands] )) ||
+_tabor__msg__set-tab-panel_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg set-tab-panel commands' commands "$@"
+}
+(( $+functions[_tabor__msg__set-tab-title_commands] )) ||
+_tabor__msg__set-tab-title_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg set-tab-title commands' commands "$@"
+}
+(( $+functions[_tabor__msg__set-web-url_commands] )) ||
+_tabor__msg__set-web-url_commands() {
+    local commands; commands=()
+    _describe -t commands 'tabor msg set-web-url commands' commands "$@"
 }
 
 if [ "$funcstack[1]" = "_tabor" ]; then

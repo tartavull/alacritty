@@ -184,7 +184,8 @@ pub enum IpcRequest {
     GetCapabilities,
     ListTabs,
     GetTabState { tab_id: IpcTabId },
-    CreateTab { options: WindowOptions },
+    CreateTab { options: WindowOptions, group_id: Option<usize>, group_name: Option<String> },
+    CreateGroup { name: Option<String> },
     CloseTab { tab_id: Option<IpcTabId> },
     SelectTab { selection: TabSelection },
     MoveTab {
@@ -211,6 +212,128 @@ pub enum IpcRequest {
     PollInspectorMessages { session_id: String, max: Option<usize> },
     SetConfig(IpcConfig),
     GetConfig(IpcGetConfig),
+}
+
+pub struct IpcRequestHelp {
+    pub name: &'static str,
+    pub summary: &'static str,
+}
+
+pub fn ipc_request_help() -> &'static [IpcRequestHelp] {
+    &[
+        IpcRequestHelp {
+            name: "ping",
+            summary: "Health check (pong).",
+        },
+        IpcRequestHelp {
+            name: "get_capabilities",
+            summary: "Protocol and platform capabilities.",
+        },
+        IpcRequestHelp {
+            name: "list_tabs",
+            summary: "List tabs grouped by tab group.",
+        },
+        IpcRequestHelp {
+            name: "get_tab_state",
+            summary: "Get state for a specific tab.",
+        },
+        IpcRequestHelp {
+            name: "create_tab",
+            summary: "Create a new terminal or web tab.",
+        },
+        IpcRequestHelp {
+            name: "create_group",
+            summary: "Create a new tab group.",
+        },
+        IpcRequestHelp {
+            name: "close_tab",
+            summary: "Close a tab (defaults to active).",
+        },
+        IpcRequestHelp {
+            name: "select_tab",
+            summary: "Select a tab by position or id.",
+        },
+        IpcRequestHelp {
+            name: "move_tab",
+            summary: "Move a tab to a group/index.",
+        },
+        IpcRequestHelp {
+            name: "set_tab_title",
+            summary: "Set or clear a tab custom title.",
+        },
+        IpcRequestHelp {
+            name: "set_group_name",
+            summary: "Set a tab group name.",
+        },
+        IpcRequestHelp {
+            name: "restore_closed_tab",
+            summary: "Restore the most recently closed tab.",
+        },
+        IpcRequestHelp {
+            name: "open_url",
+            summary: "Open URL in current or new tab.",
+        },
+        IpcRequestHelp {
+            name: "set_web_url",
+            summary: "Navigate a web tab.",
+        },
+        IpcRequestHelp {
+            name: "reload_web",
+            summary: "Reload a web tab.",
+        },
+        IpcRequestHelp {
+            name: "open_inspector",
+            summary: "Open Web Inspector for a web tab.",
+        },
+        IpcRequestHelp {
+            name: "get_tab_panel",
+            summary: "Get tab panel state.",
+        },
+        IpcRequestHelp {
+            name: "set_tab_panel",
+            summary: "Enable/disable tab panel or set width.",
+        },
+        IpcRequestHelp {
+            name: "dispatch_action",
+            summary: "Dispatch a configured action.",
+        },
+        IpcRequestHelp {
+            name: "send_input",
+            summary: "Send literal input text to a tab.",
+        },
+        IpcRequestHelp {
+            name: "run_command_bar",
+            summary: "Open the command bar with input.",
+        },
+        IpcRequestHelp {
+            name: "list_inspector_targets",
+            summary: "List Web Inspector targets.",
+        },
+        IpcRequestHelp {
+            name: "attach_inspector",
+            summary: "Attach to a Web Inspector target.",
+        },
+        IpcRequestHelp {
+            name: "detach_inspector",
+            summary: "Detach a Web Inspector session.",
+        },
+        IpcRequestHelp {
+            name: "send_inspector_message",
+            summary: "Send raw Web Inspector JSON.",
+        },
+        IpcRequestHelp {
+            name: "poll_inspector_messages",
+            summary: "Poll queued inspector messages.",
+        },
+        IpcRequestHelp {
+            name: "set_config",
+            summary: "Apply runtime config overrides.",
+        },
+        IpcRequestHelp {
+            name: "get_config",
+            summary: "Read runtime config.",
+        },
+    ]
 }
 
 impl IpcRequest {
@@ -258,6 +381,7 @@ pub enum SocketReply {
     TabList { groups: Vec<IpcTabGroup> },
     TabState { tab: IpcTabState },
     TabCreated { tab_id: IpcTabId },
+    GroupCreated { group_id: usize },
     TabPanel { panel: IpcTabPanelState },
     InspectorTargets { targets: Vec<IpcInspectorTarget> },
     InspectorAttached { session: IpcInspectorSession },
@@ -334,7 +458,13 @@ pub trait IpcContext {
     fn list_tabs(&self, now: Instant) -> Vec<IpcTabGroup>;
     fn tab_state(&self, tab_id: TabId, now: Instant) -> Option<IpcTabState>;
     fn tab_kind(&self, tab_id: TabId) -> Option<IpcTabKind>;
-    fn create_tab(&mut self, options: WindowOptions) -> Result<TabId, IpcError>;
+    fn create_tab(
+        &mut self,
+        options: WindowOptions,
+        group_id: Option<usize>,
+        group_name: Option<String>,
+    ) -> Result<TabId, IpcError>;
+    fn create_group(&mut self, name: Option<String>) -> Result<usize, IpcError>;
     fn close_tab(&mut self, tab_id: TabId) -> Result<bool, IpcError>;
     fn select_tab(&mut self, selection: TabSelection) -> Result<(), IpcError>;
     fn move_tab(
@@ -397,9 +527,31 @@ pub fn handle_request<C: IpcContext>(ctx: &mut C, request: IpcRequest) -> IpcRes
                 close_window: false,
             },
         },
-        IpcRequest::CreateTab { options } => match ctx.create_tab(options) {
+        IpcRequest::CreateTab {
+            options,
+            group_id,
+            group_name,
+        } => {
+            if group_id.is_some() && group_name.is_some() {
+                return IpcResponse {
+                    reply: reply_error(
+                        IpcErrorCode::InvalidRequest,
+                        "group_id and group_name are mutually exclusive",
+                    ),
+                    close_window: false,
+                };
+            }
+            match ctx.create_tab(options, group_id, group_name) {
             Ok(tab_id) => IpcResponse {
                 reply: SocketReply::TabCreated { tab_id: tab_id.into() },
+                close_window: false,
+            },
+            Err(err) => IpcResponse { reply: SocketReply::Error { error: err }, close_window: false },
+            }
+        },
+        IpcRequest::CreateGroup { name } => match ctx.create_group(name) {
+            Ok(group_id) => IpcResponse {
+                reply: SocketReply::GroupCreated { group_id },
                 close_window: false,
             },
             Err(err) => IpcResponse { reply: SocketReply::Error { error: err }, close_window: false },
@@ -863,11 +1015,16 @@ mod tests {
                 inspector_sessions: HashMap::new(),
                 inspector_messages: HashMap::new(),
             };
-            context.add_tab(IpcTabKind::Terminal);
+            let _ = context.add_tab(IpcTabKind::Terminal, None, None);
             context
         }
 
-        fn add_tab(&mut self, kind: IpcTabKind) -> TabId {
+        fn add_tab(
+            &mut self,
+            kind: IpcTabKind,
+            group_id: Option<usize>,
+            group_name: Option<String>,
+        ) -> Result<TabId, IpcError> {
             let index = self.next_index;
             self.next_index += 1;
             let tab_id = TabId::new(index, 0);
@@ -887,9 +1044,32 @@ mod tests {
                 self.groups.push(group);
             }
 
-            self.groups[0].tabs.push(tab_id);
+            let group_index = if let Some(group_id) = group_id {
+                self.groups
+                    .iter()
+                    .position(|group| group.id == group_id)
+                    .ok_or_else(|| IpcError::new(IpcErrorCode::NotFound, "Group not found"))?
+            } else if let Some(name) = group_name {
+                if let Some(index) = self.groups.iter().position(|group| group.name.as_deref() == Some(&name))
+                {
+                    index
+                } else {
+                    let group = MockGroup {
+                        id: self.next_group_id,
+                        name: Some(name),
+                        tabs: Vec::new(),
+                    };
+                    self.next_group_id += 1;
+                    self.groups.push(group);
+                    self.groups.len() - 1
+                }
+            } else {
+                0
+            };
+
+            self.groups[group_index].tabs.push(tab_id);
             self.active = Some(tab_id);
-            tab_id
+            Ok(tab_id)
         }
 
         fn group_for_tab(&self, tab_id: TabId) -> Option<(usize, usize)> {
@@ -960,9 +1140,14 @@ mod tests {
             self.tabs.get(&tab_id).map(|tab| tab.kind.clone())
         }
 
-        fn create_tab(&mut self, options: WindowOptions) -> Result<TabId, IpcError> {
+        fn create_tab(
+            &mut self,
+            options: WindowOptions,
+            group_id: Option<usize>,
+            group_name: Option<String>,
+        ) -> Result<TabId, IpcError> {
             match options.window_kind {
-                WindowKind::Terminal => Ok(self.add_tab(IpcTabKind::Terminal)),
+                WindowKind::Terminal => self.add_tab(IpcTabKind::Terminal, group_id, group_name),
                 WindowKind::Web { url } => {
                     if !self.web_supported {
                         return Err(IpcError::new(
@@ -970,9 +1155,16 @@ mod tests {
                             "Web tabs are not supported",
                         ));
                     }
-                    Ok(self.add_tab(IpcTabKind::Web { url }))
+                    self.add_tab(IpcTabKind::Web { url }, group_id, group_name)
                 },
             }
+        }
+
+        fn create_group(&mut self, name: Option<String>) -> Result<usize, IpcError> {
+            let group_id = self.next_group_id;
+            self.next_group_id += 1;
+            self.groups.push(MockGroup { id: group_id, name, tabs: Vec::new() });
+            Ok(group_id)
         }
 
         fn close_tab(&mut self, tab_id: TabId) -> Result<bool, IpcError> {
@@ -1116,7 +1308,7 @@ mod tests {
                     "Web tabs are not supported",
                 ));
             }
-            Ok(self.add_tab(IpcTabKind::Web { url }))
+            self.add_tab(IpcTabKind::Web { url }, None, None)
         }
 
         fn reload_web(&mut self, tab_id: TabId) -> Result<(), IpcError> {
@@ -1261,7 +1453,14 @@ mod tests {
         let mut ctx = MockContext::new(false);
         let initial_tab = ctx.active_tab_id().unwrap();
 
-        let response = handle_request(&mut ctx, IpcRequest::CreateTab { options: WindowOptions::default() });
+        let response = handle_request(
+            &mut ctx,
+            IpcRequest::CreateTab {
+                options: WindowOptions::default(),
+                group_id: None,
+                group_name: None,
+            },
+        );
         match response.reply {
             SocketReply::TabCreated { tab_id } => {
                 assert_ne!(initial_tab, tab_id.into());
@@ -1316,9 +1515,28 @@ mod tests {
     }
 
     #[test]
+    fn ipc_creates_group() {
+        let mut ctx = MockContext::new(false);
+
+        let response = handle_request(
+            &mut ctx,
+            IpcRequest::CreateGroup {
+                name: Some(String::from("notifications")),
+            },
+        );
+
+        let SocketReply::GroupCreated { group_id } = response.reply else {
+            panic!("expected group_created reply");
+        };
+        assert!(ctx.groups.iter().any(|group| group.id == group_id));
+    }
+
+    #[test]
     fn ipc_handles_list_and_state() {
         let mut ctx = MockContext::new(true);
-        let web_id = ctx.add_tab(IpcTabKind::Web { url: String::from("https://example.com") });
+        let web_id =
+            ctx.add_tab(IpcTabKind::Web { url: String::from("https://example.com") }, None, None)
+                .expect("add tab");
 
         let response = handle_request(&mut ctx, IpcRequest::ListTabs);
         let SocketReply::TabList { groups } = response.reply else {

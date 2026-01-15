@@ -288,8 +288,17 @@ impl ipc::IpcContext for IpcWindowContext<'_> {
         self.window.ipc_tab_kind(tab_id)
     }
 
-    fn create_tab(&mut self, options: WindowOptions) -> Result<TabId, ipc::IpcError> {
-        self.window.ipc_create_tab(options, self.event_proxy)
+    fn create_tab(
+        &mut self,
+        options: WindowOptions,
+        group_id: Option<usize>,
+        group_name: Option<String>,
+    ) -> Result<TabId, ipc::IpcError> {
+        self.window.ipc_create_tab(options, group_id, group_name, self.event_proxy)
+    }
+
+    fn create_group(&mut self, name: Option<String>) -> Result<usize, ipc::IpcError> {
+        self.window.ipc_create_group(name)
     }
 
     fn close_tab(&mut self, tab_id: TabId) -> Result<bool, ipc::IpcError> {

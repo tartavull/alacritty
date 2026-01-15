@@ -248,7 +248,13 @@ impl TabManager {
         }
     }
 
-    fn insert(&mut self, tab_id: TabId, tab: TabState) {
+    fn insert(
+        &mut self,
+        tab_id: TabId,
+        tab: TabState,
+        group_id: Option<usize>,
+        group_name: Option<String>,
+    ) -> Result<(), String> {
         if self.slots.len() <= tab_id.slot_index() {
             self.slots.resize_with(tab_id.slot_index() + 1, || TabSlot {
                 generation: 0,
@@ -264,10 +270,27 @@ impl TabManager {
             self.groups.push(group);
         }
 
-        let target_index = self
-            .active
-            .and_then(|active| self.groups.iter().position(|group| group.tabs.contains(&active)))
-            .unwrap_or(0);
+        let group_name = group_name.filter(|name| !name.is_empty());
+        let target_index = if let Some(group_id) = group_id {
+            self.groups
+                .iter()
+                .position(|group| group.id == group_id)
+                .ok_or_else(|| String::from("Group not found"))?
+        } else if let Some(name) = group_name {
+            if let Some(index) = self.groups.iter().position(|group| group.name.as_deref() == Some(&name))
+            {
+                index
+            } else {
+                let mut group = self.new_group();
+                group.name = Some(name);
+                self.groups.push(group);
+                self.groups.len() - 1
+            }
+        } else {
+            self.active
+                .and_then(|active| self.groups.iter().position(|group| group.tabs.contains(&active)))
+                .unwrap_or(0)
+        };
 
         if !self.groups[target_index].tabs.contains(&tab_id) {
             self.groups[target_index].tabs.push(tab_id);
@@ -276,6 +299,7 @@ impl TabManager {
         if self.active.is_none() {
             self.active = Some(tab_id);
         }
+        Ok(())
     }
 
     fn get(&self, tab_id: TabId) -> Option<&TabState> {
@@ -593,6 +617,14 @@ impl TabManager {
         TabGroup { id, name: None, tabs: Vec::new() }
     }
 
+    fn create_group(&mut self, name: Option<String>) -> usize {
+        let mut group = self.new_group();
+        group.name = name.filter(|name| !name.is_empty());
+        let group_id = group.id;
+        self.groups.push(group);
+        group_id
+    }
+
     fn preview_group_id(&self) -> usize {
         self.next_group_id
     }
@@ -740,6 +772,8 @@ impl WindowContext {
             &proxy,
             options.window_kind,
             None,
+            None,
+            None,
         )?;
 
         // Create context for the Tabor window.
@@ -779,6 +813,8 @@ impl WindowContext {
         proxy: &EventLoopProxy<Event>,
         window_kind: WindowKind,
         pending_popup: Option<PendingPopup>,
+        group_id: Option<usize>,
+        group_name: Option<String>,
     ) -> Result<TabId, Box<dyn Error>> {
         let tab_id = tabs.allocate_id();
         let event_proxy = EventProxy::new(proxy.clone(), display.window.id(), tab_id);
@@ -887,7 +923,8 @@ impl WindowContext {
             shell_pid,
         };
 
-        tabs.insert(tab_id, tab);
+        tabs.insert(tab_id, tab, group_id, group_name)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
         Ok(tab_id)
     }
 
@@ -1342,7 +1379,17 @@ impl WindowContext {
         options: WindowOptions,
         proxy: &EventLoopProxy<Event>,
     ) -> Result<TabId, Box<dyn Error>> {
-        self.create_tab_with_popup(options, proxy, None)
+        self.create_tab_with_popup(options, proxy, None, None, None)
+    }
+
+    pub(crate) fn create_tab_in_group(
+        &mut self,
+        options: WindowOptions,
+        group_id: Option<usize>,
+        group_name: Option<String>,
+        proxy: &EventLoopProxy<Event>,
+    ) -> Result<TabId, Box<dyn Error>> {
+        self.create_tab_with_popup(options, proxy, None, group_id, group_name)
     }
 
     fn create_tab_with_popup(
@@ -1350,6 +1397,8 @@ impl WindowContext {
         options: WindowOptions,
         proxy: &EventLoopProxy<Event>,
         pending_popup: Option<PendingPopup>,
+        group_id: Option<usize>,
+        group_name: Option<String>,
     ) -> Result<TabId, Box<dyn Error>> {
         let mut pty_config = self.config.pty_config();
         options.terminal_options.override_pty_config(&mut pty_config);
@@ -1362,6 +1411,8 @@ impl WindowContext {
             proxy,
             options.window_kind,
             pending_popup,
+            group_id,
+            group_name,
         )?;
         self.set_active_tab(tab_id);
         if let Some(input) = command_input.as_deref() {
@@ -1394,7 +1445,7 @@ impl WindowContext {
             url: popup.url.clone().unwrap_or_default(),
         };
 
-        self.create_tab_with_popup(options, proxy, Some(popup))
+        self.create_tab_with_popup(options, proxy, Some(popup), None, None)
     }
 
     pub(crate) fn handle_tab_command(&mut self, command: crate::tabs::TabCommand) {
@@ -1580,11 +1631,23 @@ impl WindowContext {
     pub(crate) fn ipc_create_tab(
         &mut self,
         options: WindowOptions,
+        group_id: Option<usize>,
+        group_name: Option<String>,
         proxy: &EventLoopProxy<Event>,
     ) -> Result<TabId, IpcError> {
-        self.create_tab(options, proxy).map_err(|err| {
+        self.create_tab_in_group(options, group_id, group_name, proxy).map_err(|err| {
             IpcError::new(IpcErrorCode::Internal, format!("Could not create tab: {err}"))
         })
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn ipc_create_group(&mut self, name: Option<String>) -> Result<usize, IpcError> {
+        let group_id = self.tabs.create_group(name);
+        self.refresh_tab_panel();
+        self.display.pending_update.dirty = true;
+        self.display.damage_tracker.frame().mark_fully_damaged();
+        self.dirty = true;
+        Ok(group_id)
     }
 
     #[cfg(unix)]

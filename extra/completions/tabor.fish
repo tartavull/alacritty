@@ -25,7 +25,7 @@ function __fish_tabor_using_subcommand
 end
 
 complete -c tabor -n "__fish_tabor_needs_command" -l embed -d 'X11 window ID to embed Tabor within (decimal or hexadecimal with "0x" prefix)' -r
-complete -c tabor -n "__fish_tabor_needs_command" -l config-file -d 'Specify alternative configuration file [default: $XDG_CONFIG_HOME/tabor/tabor.toml]' -r -F
+complete -c tabor -n "__fish_tabor_needs_command" -l config-file -d 'Specify alternative configuration file [default: $HOME/.config/tabor/tabor.toml]' -r -F
 complete -c tabor -n "__fish_tabor_needs_command" -l socket -d 'Path for IPC socket creation' -r -F
 complete -c tabor -n "__fish_tabor_needs_command" -l working-directory -d 'Start the shell in the specified working directory' -r -F
 complete -c tabor -n "__fish_tabor_needs_command" -s e -l command -d 'Command and args to execute (must be last argument)' -r
@@ -43,21 +43,140 @@ complete -c tabor -n "__fish_tabor_needs_command" -s V -l version -d 'Print vers
 complete -c tabor -n "__fish_tabor_needs_command" -f -a "msg" -d 'Send a message to the Tabor socket'
 complete -c tabor -n "__fish_tabor_needs_command" -f -a "migrate" -d 'Migrate the configuration file'
 complete -c tabor -n "__fish_tabor_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config send help" -s s -l socket -d 'IPC socket connection path override' -r -F
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config send help" -s h -l help -d 'Print help'
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config send help" -f -a "config" -d 'Update the Tabor configuration'
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config send help" -f -a "get-config" -d 'Read runtime Tabor configuration'
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config send help" -f -a "send" -d 'Send a raw JSON IPC message'
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config send help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -s s -l socket -d 'IPC socket connection path override' -r -F
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "config" -d 'Update the Tabor configuration'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "get-config" -d 'Read runtime Tabor configuration'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "ping" -d 'Ping the IPC socket'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "get-capabilities" -d 'List IPC capabilities'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "list-tabs" -d 'List all tabs'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "get-tab-state" -d 'Get a single tab state'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "create-tab" -d 'Create a new tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "create-group" -d 'Create a new tab group'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "close-tab" -d 'Close a tab (defaults to active)'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "select-tab" -d 'Select a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "move-tab" -d 'Move a tab within or across groups'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "set-tab-title" -d 'Set or clear a tab title'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "set-group-name" -d 'Set or clear a tab group name'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "restore-closed-tab" -d 'Restore the most recently closed tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "open-url" -d 'Open a URL in a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "set-web-url" -d 'Set the URL for a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "reload-web" -d 'Reload a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "open-inspector" -d 'Open the Web Inspector for a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "get-tab-panel" -d 'Get tab panel state'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "set-tab-panel" -d 'Set tab panel state'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "dispatch-action" -d 'Dispatch a configured action'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "send-input" -d 'Send literal input to a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "run-command-bar" -d 'Run a command in the command bar'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "inspector" -d 'Web Inspector commands'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "send" -d 'Send raw JSON IPC message'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "list-requests" -d 'List available IPC request types'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and not __fish_seen_subcommand_from config get-config ping get-capabilities list-tabs get-tab-state create-tab create-group close-tab select-tab move-tab set-tab-title set-group-name restore-closed-tab open-url set-web-url reload-web open-inspector get-tab-panel set-tab-panel dispatch-action send-input run-command-bar inspector send list-requests help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from config" -s w -l window-id -d 'Window ID for the new config' -r
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from config" -s r -l reset -d 'Clear all runtime configuration changes'
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from config" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from get-config" -s w -l window-id -d 'Window ID for the config request' -r
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from get-config" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from send" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "send" -d 'Send a raw JSON IPC message'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from ping" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from get-capabilities" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from list-tabs" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from get-tab-state" -l tab-id -d 'Tab id formatted as <index>:<generation>' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from get-tab-state" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l web -d 'Create a web tab with the provided URL' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l group-id -d 'Target group id for the new tab' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l group-name -d 'Target group name for the new tab' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l working-directory -d 'Start the shell in the specified working directory' -r -F
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -s e -l command -d 'Command and args to execute (must be last argument)' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -s T -l title -d 'Defines the window title [default: Tabor]' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l class -d 'Defines window class/app_id on X11/Wayland [default: Tabor]' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l hold -d 'Remain open after child process exit'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-group" -l name -d 'Optional name for the new group' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-group" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from close-tab" -l tab-id -d 'Tab id formatted as <index>:<generation>' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from close-tab" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from select-tab" -l index -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from select-tab" -l tab-id -d 'Tab id formatted as <index>:<generation>' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from select-tab" -l active
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from select-tab" -l next
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from select-tab" -l previous
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from select-tab" -l last
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from select-tab" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from move-tab" -l tab-id -d 'Tab id formatted as <index>:<generation>' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from move-tab" -l target-group-id -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from move-tab" -l target-index -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from move-tab" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-tab-title" -l tab-id -d 'Tab id formatted as <index>:<generation>' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-tab-title" -l title -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-tab-title" -l clear
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-tab-title" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-group-name" -l group-id -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-group-name" -l name -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-group-name" -l clear
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-group-name" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from restore-closed-tab" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from open-url" -l tab-id -d 'Target tab id formatted as <index>:<generation>' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from open-url" -l new-tab
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from open-url" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-web-url" -l tab-id -d 'Tab id formatted as <index>:<generation> (defaults to active tab)' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-web-url" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from reload-web" -l tab-id -d 'Tab id formatted as <index>:<generation> (defaults to active tab)' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from reload-web" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from open-inspector" -l tab-id -d 'Tab id formatted as <index>:<generation> (defaults to active tab)' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from open-inspector" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from get-tab-panel" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-tab-panel" -l width -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-tab-panel" -l enable
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-tab-panel" -l disable
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from set-tab-panel" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -l tab-id -d 'Tab id formatted as <index>:<generation> (defaults to active tab)' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -l action -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -l vi-motion -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -l vi-action -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -l search-action -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -l mouse-action -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -l esc -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -l command -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from dispatch-action" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from send-input" -l tab-id -d 'Tab id formatted as <index>:<generation> (defaults to active tab)' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from send-input" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from run-command-bar" -l tab-id -d 'Tab id formatted as <index>:<generation> (defaults to active tab)' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from run-command-bar" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from inspector" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from inspector" -f -a "list-targets" -d 'List Web Inspector targets'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from inspector" -f -a "attach" -d 'Attach to a Web Inspector target'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from inspector" -f -a "detach" -d 'Detach a Web Inspector session'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from inspector" -f -a "send" -d 'Send a Web Inspector message'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from inspector" -f -a "poll" -d 'Poll for Web Inspector messages'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from inspector" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from send" -s h -l help -d 'Print help'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from list-requests" -s h -l help -d 'Print help'
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "config" -d 'Update the Tabor configuration'
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "get-config" -d 'Read runtime Tabor configuration'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "ping" -d 'Ping the IPC socket'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "get-capabilities" -d 'List IPC capabilities'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "list-tabs" -d 'List all tabs'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "get-tab-state" -d 'Get a single tab state'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "create-tab" -d 'Create a new tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "create-group" -d 'Create a new tab group'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "close-tab" -d 'Close a tab (defaults to active)'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "select-tab" -d 'Select a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "move-tab" -d 'Move a tab within or across groups'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "set-tab-title" -d 'Set or clear a tab title'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "set-group-name" -d 'Set or clear a tab group name'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "restore-closed-tab" -d 'Restore the most recently closed tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "open-url" -d 'Open a URL in a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "set-web-url" -d 'Set the URL for a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "reload-web" -d 'Reload a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "open-inspector" -d 'Open the Web Inspector for a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "get-tab-panel" -d 'Get tab panel state'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "set-tab-panel" -d 'Set tab panel state'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "dispatch-action" -d 'Dispatch a configured action'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "send-input" -d 'Send literal input to a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "run-command-bar" -d 'Run a command in the command bar'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "inspector" -d 'Web Inspector commands'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "send" -d 'Send raw JSON IPC message'
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "list-requests" -d 'List available IPC request types'
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c tabor -n "__fish_tabor_using_subcommand migrate" -s c -l config-file -d 'Path to the configuration file' -r -F
 complete -c tabor -n "__fish_tabor_using_subcommand migrate" -s d -l dry-run -d 'Only output TOML config to STDOUT'
@@ -68,6 +187,29 @@ complete -c tabor -n "__fish_tabor_using_subcommand migrate" -s h -l help -d 'Pr
 complete -c tabor -n "__fish_tabor_using_subcommand help; and not __fish_seen_subcommand_from msg migrate help" -f -a "msg" -d 'Send a message to the Tabor socket'
 complete -c tabor -n "__fish_tabor_using_subcommand help; and not __fish_seen_subcommand_from msg migrate help" -f -a "migrate" -d 'Migrate the configuration file'
 complete -c tabor -n "__fish_tabor_using_subcommand help; and not __fish_seen_subcommand_from msg migrate help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "send" -d 'Send a raw JSON IPC message'
 complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "config" -d 'Update the Tabor configuration'
 complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "get-config" -d 'Read runtime Tabor configuration'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "ping" -d 'Ping the IPC socket'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "get-capabilities" -d 'List IPC capabilities'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "list-tabs" -d 'List all tabs'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "get-tab-state" -d 'Get a single tab state'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "create-tab" -d 'Create a new tab'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "create-group" -d 'Create a new tab group'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "close-tab" -d 'Close a tab (defaults to active)'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "select-tab" -d 'Select a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "move-tab" -d 'Move a tab within or across groups'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "set-tab-title" -d 'Set or clear a tab title'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "set-group-name" -d 'Set or clear a tab group name'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "restore-closed-tab" -d 'Restore the most recently closed tab'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "open-url" -d 'Open a URL in a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "set-web-url" -d 'Set the URL for a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "reload-web" -d 'Reload a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "open-inspector" -d 'Open the Web Inspector for a web tab'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "get-tab-panel" -d 'Get tab panel state'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "set-tab-panel" -d 'Set tab panel state'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "dispatch-action" -d 'Dispatch a configured action'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "send-input" -d 'Send literal input to a tab'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "run-command-bar" -d 'Run a command in the command bar'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "inspector" -d 'Web Inspector commands'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "send" -d 'Send raw JSON IPC message'
+complete -c tabor -n "__fish_tabor_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "list-requests" -d 'List available IPC request types'

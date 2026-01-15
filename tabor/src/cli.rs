@@ -5,12 +5,14 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use tabor_config::SerdeReplace;
-use clap::{ArgAction, Args, Parser, Subcommand, ValueHint};
+use clap::{ArgAction, ArgGroup, Args, Parser, Subcommand, ValueHint};
 use log::{LevelFilter, error};
 use serde::{Deserialize, Serialize};
 use toml::Value;
 
 use tabor_terminal::tty::Options as PtyOptions;
+#[cfg(unix)]
+use tabor_terminal::vi_mode::ViMotion;
 
 use crate::config::UiConfig;
 use crate::config::ui_config::Program;
@@ -145,6 +147,33 @@ fn parse_class(input: &str) -> Result<Class, String> {
     Ok(Class::new(general, instance))
 }
 
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabIdArg {
+    pub index: u32,
+    pub generation: u32,
+}
+
+#[cfg(unix)]
+fn parse_tab_id(input: &str) -> Result<TabIdArg, String> {
+    let (index, generation) = input
+        .split_once(':')
+        .or_else(|| input.split_once(','))
+        .ok_or_else(|| String::from("tab id must be <index>:<generation>"))?;
+    let index = index
+        .parse::<u32>()
+        .map_err(|_| String::from("tab id index must be a u32"))?;
+    let generation = generation
+        .parse::<u32>()
+        .map_err(|_| String::from("tab id generation must be a u32"))?;
+    Ok(TabIdArg { index, generation })
+}
+
+#[cfg(unix)]
+fn parse_vi_motion(input: &str) -> Result<ViMotion, String> {
+    serde_json::from_str(&format!("\"{input}\"")).map_err(|err| err.to_string())
+}
+
 /// Convert to hex if possible, else decimal
 fn parse_hex_or_decimal(input: &str) -> Option<u32> {
     input
@@ -262,12 +291,395 @@ pub enum MessageCommand {
     /// Read runtime Tabor configuration.
     GetConfig(IpcGetConfig),
 
+    /// Ping the IPC socket.
+    Ping,
+
+    /// List IPC capabilities.
+    GetCapabilities,
+
+    /// List all tabs.
+    ListTabs,
+
+    /// Get a single tab state.
+    GetTabState(MsgGetTabState),
+
+    /// Create a new tab.
+    CreateTab(MsgCreateTab),
+
+    /// Create a new tab group.
+    CreateGroup(MsgCreateGroup),
+
+    /// Close a tab (defaults to active).
+    CloseTab(MsgCloseTab),
+
+    /// Select a tab.
+    SelectTab(MsgSelectTab),
+
+    /// Move a tab within or across groups.
+    MoveTab(MsgMoveTab),
+
+    /// Set or clear a tab title.
+    SetTabTitle(MsgSetTabTitle),
+
+    /// Set or clear a tab group name.
+    SetGroupName(MsgSetGroupName),
+
+    /// Restore the most recently closed tab.
+    RestoreClosedTab,
+
+    /// Open a URL in a tab.
+    OpenUrl(MsgOpenUrl),
+
+    /// Set the URL for a web tab.
+    SetWebUrl(MsgSetWebUrl),
+
+    /// Reload a web tab.
+    ReloadWeb(MsgReloadWeb),
+
+    /// Open the Web Inspector for a web tab.
+    OpenInspector(MsgOpenInspector),
+
+    /// Get tab panel state.
+    GetTabPanel,
+
+    /// Set tab panel state.
+    SetTabPanel(MsgSetTabPanel),
+
+    /// Dispatch a configured action.
+    DispatchAction(MsgDispatchAction),
+
+    /// Send literal input to a tab.
+    SendInput(MsgSendInput),
+
+    /// Run a command in the command bar.
+    RunCommandBar(MsgRunCommandBar),
+
+    /// Web Inspector commands.
+    Inspector {
+        #[clap(subcommand)]
+        command: MsgInspector,
+    },
+
     /// Send raw JSON IPC message.
     Send {
         /// JSON payload to send.
         #[clap(value_name = "JSON")]
         json: String,
     },
+
+    /// List available IPC request types.
+    ListRequests,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgGetTabState {
+    /// Tab id formatted as <index>:<generation>.
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: TabIdArg,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgCreateTab {
+    /// Create a web tab with the provided URL.
+    #[clap(long, value_name = "URL")]
+    pub web: Option<String>,
+
+    /// Target group id for the new tab.
+    #[clap(long, value_name = "GROUP_ID", conflicts_with = "group_name")]
+    pub group_id: Option<usize>,
+
+    /// Target group name for the new tab.
+    #[clap(long, value_name = "NAME", conflicts_with = "group_id")]
+    pub group_name: Option<String>,
+
+    #[clap(flatten)]
+    pub terminal_options: TerminalOptions,
+
+    #[clap(flatten)]
+    pub window_identity: WindowIdentity,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgCreateGroup {
+    /// Optional name for the new group.
+    #[clap(long, value_name = "NAME")]
+    pub name: Option<String>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgCloseTab {
+    /// Tab id formatted as <index>:<generation>.
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[clap(group(
+    ArgGroup::new("selection")
+        .required(true)
+        .args(&["active", "next", "previous", "last", "index", "tab_id"])
+))]
+pub struct MsgSelectTab {
+    #[clap(long)]
+    pub active: bool,
+
+    #[clap(long)]
+    pub next: bool,
+
+    #[clap(long)]
+    pub previous: bool,
+
+    #[clap(long)]
+    pub last: bool,
+
+    #[clap(long)]
+    pub index: Option<usize>,
+
+    /// Tab id formatted as <index>:<generation>.
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[clap(group(
+    ArgGroup::new("target")
+        .required(true)
+        .args(&["target_group_id", "target_index"])
+))]
+pub struct MsgMoveTab {
+    /// Tab id formatted as <index>:<generation>.
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: TabIdArg,
+
+    #[clap(long, value_name = "GROUP_ID")]
+    pub target_group_id: Option<usize>,
+
+    #[clap(long, value_name = "INDEX")]
+    pub target_index: Option<usize>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[clap(group(
+    ArgGroup::new("title_choice")
+        .required(true)
+        .args(&["title", "clear"])
+))]
+pub struct MsgSetTabTitle {
+    /// Tab id formatted as <index>:<generation>.
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+
+    #[clap(long)]
+    pub title: Option<String>,
+
+    #[clap(long, conflicts_with = "title")]
+    pub clear: bool,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[clap(group(
+    ArgGroup::new("group_name_choice")
+        .required(true)
+        .args(&["name", "clear"])
+))]
+pub struct MsgSetGroupName {
+    #[clap(long, value_name = "GROUP_ID")]
+    pub group_id: usize,
+
+    #[clap(long)]
+    pub name: Option<String>,
+
+    #[clap(long, conflicts_with = "name")]
+    pub clear: bool,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgOpenUrl {
+    pub url: String,
+
+    #[clap(long, conflicts_with = "tab_id")]
+    pub new_tab: bool,
+
+    /// Target tab id formatted as <index>:<generation>.
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgSetWebUrl {
+    pub url: String,
+
+    /// Tab id formatted as <index>:<generation> (defaults to active tab).
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgReloadWeb {
+    /// Tab id formatted as <index>:<generation> (defaults to active tab).
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgOpenInspector {
+    /// Tab id formatted as <index>:<generation> (defaults to active tab).
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[clap(group(
+    ArgGroup::new("panel")
+        .required(true)
+        .args(&["enable", "disable", "width"])
+))]
+pub struct MsgSetTabPanel {
+    #[clap(long, conflicts_with = "disable")]
+    pub enable: bool,
+
+    #[clap(long, conflicts_with = "enable")]
+    pub disable: bool,
+
+    #[clap(long)]
+    pub width: Option<usize>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[clap(group(
+    ArgGroup::new("action_choice")
+        .required(true)
+        .args(&[
+            "action",
+            "vi_motion",
+            "vi_action",
+            "search_action",
+            "mouse_action",
+            "esc",
+            "command",
+        ])
+))]
+pub struct MsgDispatchAction {
+    /// Tab id formatted as <index>:<generation> (defaults to active tab).
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+
+    #[clap(long)]
+    pub action: Option<String>,
+
+    #[clap(long, value_parser = parse_vi_motion)]
+    pub vi_motion: Option<ViMotion>,
+
+    #[clap(long)]
+    pub vi_action: Option<String>,
+
+    #[clap(long)]
+    pub search_action: Option<String>,
+
+    #[clap(long)]
+    pub mouse_action: Option<String>,
+
+    #[clap(long)]
+    pub esc: Option<String>,
+
+    #[clap(long, num_args = 1..)]
+    pub command: Option<Vec<String>>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgSendInput {
+    pub text: String,
+
+    /// Tab id formatted as <index>:<generation> (defaults to active tab).
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgRunCommandBar {
+    pub input: String,
+
+    /// Tab id formatted as <index>:<generation> (defaults to active tab).
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+}
+
+#[cfg(unix)]
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum MsgInspector {
+    /// List Web Inspector targets.
+    ListTargets,
+
+    /// Attach to a Web Inspector target.
+    Attach(MsgInspectorAttach),
+
+    /// Detach a Web Inspector session.
+    Detach(MsgInspectorDetach),
+
+    /// Send a Web Inspector message.
+    Send(MsgInspectorSend),
+
+    /// Poll for Web Inspector messages.
+    Poll(MsgInspectorPoll),
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[clap(group(
+    ArgGroup::new("inspector_target")
+        .required(true)
+        .args(&["tab_id", "target_id"])
+))]
+pub struct MsgInspectorAttach {
+    /// Tab id formatted as <index>:<generation>.
+    #[clap(long, value_parser = parse_tab_id, value_name = "INDEX:GEN")]
+    pub tab_id: Option<TabIdArg>,
+
+    #[clap(long)]
+    pub target_id: Option<u64>,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgInspectorDetach {
+    #[clap(long)]
+    pub session_id: String,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgInspectorSend {
+    #[clap(long)]
+    pub session_id: String,
+
+    #[clap(long)]
+    pub message: String,
+}
+
+#[cfg(unix)]
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MsgInspectorPoll {
+    #[clap(long)]
+    pub session_id: String,
+
+    #[clap(long)]
+    pub max: Option<usize>,
 }
 
 /// Migrate the configuration file.
@@ -436,14 +848,14 @@ impl DerefMut for ParsedOptions {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::fs::File;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::io::Read;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use clap::CommandFactory;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use clap_complete::Shell;
     use toml::Table;
 
@@ -542,7 +954,7 @@ mod tests {
         assert_eq!(value, None);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn completions() {
         let mut clap = Options::command();
@@ -552,6 +964,12 @@ mod tests {
             (Shell::Fish, "tabor.fish"),
             (Shell::Zsh, "_tabor"),
         ] {
+            if std::env::var("TABOR_GEN_COMPLETIONS").is_ok() {
+                let mut file = File::create(format!("../extra/completions/{file}")).unwrap();
+                clap_complete::generate(*shell, &mut clap, "tabor", &mut file);
+                continue;
+            }
+
             let mut generated = Vec::new();
             clap_complete::generate(*shell, &mut clap, "tabor", &mut generated);
             let generated = String::from_utf8_lossy(&generated);
@@ -563,13 +981,8 @@ mod tests {
             assert_eq!(generated, completion);
         }
 
-        // NOTE: Use this to generate new completions.
-        //
-        // let mut file = File::create("../extra/completions/tabor.bash").unwrap();
-        // clap_complete::generate(Shell::Bash, &mut clap, "tabor", &mut file);
-        // let mut file = File::create("../extra/completions/tabor.fish").unwrap();
-        // clap_complete::generate(Shell::Fish, &mut clap, "tabor", &mut file);
-        // let mut file = File::create("../extra/completions/_tabor").unwrap();
-        // clap_complete::generate(Shell::Zsh, &mut clap, "tabor", &mut file);
+        if std::env::var("TABOR_GEN_COMPLETIONS").is_ok() {
+            return;
+        }
     }
 }
