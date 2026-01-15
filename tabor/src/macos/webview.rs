@@ -1,6 +1,8 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ptr;
 use std::ptr::NonNull;
 
@@ -10,18 +12,23 @@ use objc2::encode::{Encode, Encoding};
 use objc2::ffi::NSInteger;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2::runtime::NSObject;
 use objc2::runtime::Bool;
-use objc2::{class, msg_send, sel, MainThreadMarker};
+use objc2::{class, define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSNumber, NSPoint, NSString};
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
+use winit::event_loop::EventLoopProxy;
 use winit::raw_window_handle::RawWindowHandle;
+use winit::window::WindowId;
 
 use tabor_terminal::grid::Dimensions;
 
 use crate::display::SizeInfo;
 use crate::display::window::Window;
+use crate::event::{Event, EventType};
+use crate::tabs::TabId;
 use libc::{c_char, c_void};
 
 #[link(name = "WebKit", kind = "framework")]
@@ -69,16 +76,264 @@ pub struct WebView {
     view: Retained<AnyObject>,
     last_title: Option<String>,
     last_url: Option<String>,
+    _delegate: Retained<AnyObject>,
 }
 
+pub(crate) struct PendingPopup {
+    pub(crate) view: Retained<AnyObject>,
+    pub(crate) delegate: Retained<AnyObject>,
+    pub(crate) url: Option<String>,
+}
+
+struct WebViewDelegateIvars {
+    proxy: EventLoopProxy<Event>,
+    window_id: WindowId,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = WebViewDelegateIvars]
+    struct WebViewDelegate;
+
+    impl WebViewDelegate {
+        #[unsafe(method(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
+        fn create_webview(
+            &self,
+            webview: *mut AnyObject,
+            config: *mut AnyObject,
+            navigation_action: *mut AnyObject,
+            _window_features: *mut AnyObject,
+        ) -> *mut AnyObject {
+            let Some(config) = (unsafe { config.as_ref() }) else {
+                return ptr::null_mut();
+            };
+            if let Err(err) = configure_webview_config(config) {
+                debug!("Failed to configure popup WebView: {err}");
+                return ptr::null_mut();
+            }
+
+            let frame: CGRect = unsafe { msg_send![webview, frame] };
+            let view: *mut AnyObject = unsafe { msg_send![class!(WKWebView), alloc] };
+            let view: *mut AnyObject =
+                unsafe { msg_send![view, initWithFrame: frame, configuration: config] };
+            let Some(view) = (unsafe { Retained::from_raw(view) }) else {
+                return ptr::null_mut();
+            };
+
+            if let Err(err) = apply_safari_user_agent(&view) {
+                debug!("Failed to apply Safari user agent: {err}");
+                return ptr::null_mut();
+            }
+
+            let delegate = WebViewDelegate::new(self.ivars().proxy.clone(), self.ivars().window_id);
+            let delegate = unsafe { Retained::cast_unchecked(delegate) };
+            set_webview_delegate(&view, &delegate);
+
+            unsafe {
+                let _: () = msg_send![&*view, setHidden: true];
+            }
+
+            let url = navigation_action_url(navigation_action);
+            let Some(popup_view) = (unsafe {
+                Retained::retain(Retained::as_ptr(&view).cast_mut())
+            })
+            else {
+                return ptr::null_mut();
+            };
+
+            let popup_id = register_pending_popup(PendingPopup {
+                view: popup_view,
+                delegate,
+                url,
+            });
+
+            let event = Event::new(
+                EventType::WebPopup { popup_id },
+                self.ivars().window_id,
+            );
+            let _ = self.ivars().proxy.send_event(event);
+
+            Retained::autorelease_return(view)
+        }
+
+        #[unsafe(method(webViewDidClose:))]
+        fn web_view_did_close(&self, webview: *mut AnyObject) {
+            let Some(webview) = (unsafe { webview.as_ref() }) else {
+                return;
+            };
+            let Some(tab_id) = take_webview_tab_id(webview) else {
+                return;
+            };
+
+            let event = Event::new(EventType::CloseTab(tab_id), self.ivars().window_id);
+            let _ = self.ivars().proxy.send_event(event);
+        }
+    }
+);
+
+static NEXT_POPUP_ID: AtomicUsize = AtomicUsize::new(1);
 struct MouseMonitor {
     _monitor: Retained<AnyObject>,
     _block: RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent>,
 }
 
 thread_local! {
+    static PENDING_POPUPS: RefCell<HashMap<usize, PendingPopup>> = RefCell::new(HashMap::new());
+    static WEBVIEW_TAB_IDS: RefCell<HashMap<usize, TabId>> = RefCell::new(HashMap::new());
     static MOUSE_MONITOR: RefCell<Option<MouseMonitor>> = RefCell::new(None);
     static LAST_MOUSE_EVENT: RefCell<Option<Retained<NSEvent>>> = RefCell::new(None);
+}
+
+impl WebViewDelegate {
+    fn new(proxy: EventLoopProxy<Event>, window_id: WindowId) -> Retained<Self> {
+        let mtm = MainThreadMarker::new()
+            .expect("WebView delegate must be created on the main thread");
+        let this = WebViewDelegate::alloc(mtm)
+            .set_ivars(WebViewDelegateIvars { proxy, window_id });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn webview_key(view: &AnyObject) -> usize {
+    view as *const AnyObject as usize
+}
+
+fn register_pending_popup(popup: PendingPopup) -> usize {
+    let popup_id = NEXT_POPUP_ID.fetch_add(1, Ordering::Relaxed);
+    PENDING_POPUPS.with(|cell| {
+        cell.borrow_mut().insert(popup_id, popup);
+    });
+    popup_id
+}
+
+pub(crate) fn take_pending_popup(popup_id: usize) -> Option<PendingPopup> {
+    PENDING_POPUPS.with(|cell| cell.borrow_mut().remove(&popup_id))
+}
+
+fn register_webview_tab(view: &AnyObject, tab_id: TabId) {
+    let key = webview_key(view);
+    WEBVIEW_TAB_IDS.with(|cell| {
+        cell.borrow_mut().insert(key, tab_id);
+    });
+}
+
+fn unregister_webview_tab(view: &AnyObject) {
+    let key = webview_key(view);
+    WEBVIEW_TAB_IDS.with(|cell| {
+        cell.borrow_mut().remove(&key);
+    });
+}
+
+fn take_webview_tab_id(view: &AnyObject) -> Option<TabId> {
+    let key = webview_key(view);
+    WEBVIEW_TAB_IDS.with(|cell| cell.borrow_mut().remove(&key))
+}
+
+fn set_webview_delegate(view: &AnyObject, delegate: &AnyObject) {
+    unsafe {
+        let _: () = msg_send![view, setUIDelegate: delegate];
+        let _: () = msg_send![view, setNavigationDelegate: delegate];
+    }
+}
+
+fn safari_user_agent(view: &AnyObject) -> Result<String, Box<dyn Error>> {
+    let key = NSString::from_str("userAgent");
+    let value: *mut AnyObject = unsafe { msg_send![view, valueForKey: &*key] };
+    if value.is_null() {
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, "WKWebView has no userAgent").into());
+    }
+
+    let base_agent = unsafe { &*(value as *const NSString) }.to_string();
+    if base_agent.contains("Safari/") {
+        return Ok(base_agent);
+    }
+
+    let webkit_version = base_agent
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix("AppleWebKit/"))
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::Other, "WKWebView userAgent missing AppleWebKit")
+        })?;
+
+    let safari_version = safari_version_from_bundle()?;
+    Ok(format!("{base_agent} Version/{safari_version} Safari/{webkit_version}"))
+}
+
+fn safari_version_from_bundle() -> Result<String, Box<dyn Error>> {
+    let paths = ["/Applications/Safari.app", "/System/Applications/Safari.app"];
+    let mut bundle: *mut AnyObject = ptr::null_mut();
+    for path in paths {
+        let ns_path = NSString::from_str(path);
+        let candidate: *mut AnyObject =
+            unsafe { msg_send![class!(NSBundle), bundleWithPath: &*ns_path] };
+        if !candidate.is_null() {
+            bundle = candidate;
+            break;
+        }
+    }
+
+    if bundle.is_null() {
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, "Safari.app not found").into());
+    }
+
+    let key = NSString::from_str("CFBundleShortVersionString");
+    let value: *mut AnyObject = unsafe { msg_send![bundle, objectForInfoDictionaryKey: &*key] };
+    if value.is_null() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Safari bundle missing CFBundleShortVersionString",
+        )
+        .into());
+    }
+
+    Ok(unsafe { &*(value as *const NSString) }.to_string())
+}
+
+fn apply_safari_user_agent(view: &AnyObject) -> Result<(), Box<dyn Error>> {
+    let agent = safari_user_agent(view)?;
+    let selector = sel!(setCustomUserAgent:);
+    let responds: Bool = unsafe { msg_send![view, respondsToSelector: selector] };
+    if !responds.as_bool() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "WKWebView does not support setCustomUserAgent",
+        )
+        .into());
+    }
+
+    let agent = NSString::from_str(&agent);
+    unsafe {
+        let _: () = msg_send![view, setCustomUserAgent: &*agent];
+    }
+
+    Ok(())
+}
+
+fn navigation_action_url(navigation_action: *mut AnyObject) -> Option<String> {
+    let request: *mut AnyObject = unsafe { msg_send![navigation_action, request] };
+    if request.is_null() {
+        return None;
+    }
+
+    let url: *mut AnyObject = unsafe { msg_send![request, URL] };
+    if url.is_null() {
+        return None;
+    }
+
+    let absolute: *mut AnyObject = unsafe { msg_send![url, absoluteString] };
+    if absolute.is_null() {
+        return None;
+    }
+
+    Some(unsafe { &*(absolute as *const NSString) }.to_string())
+}
+
+fn configure_webview_config(config: &AnyObject) -> Result<(), Box<dyn Error>> {
+    enable_web_authentication(config)?;
+    enable_web_inspector(config)?;
+    enable_web_popups(config)?;
+    Ok(())
 }
 
 fn install_mouse_monitor() -> Result<(), Box<dyn Error>> {
@@ -119,7 +374,13 @@ fn take_last_mouse_event() -> Option<Retained<NSEvent>> {
 }
 
 impl WebView {
-    pub fn new(window: &Window, size_info: &SizeInfo, url: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new(
+        window: &Window,
+        size_info: &SizeInfo,
+        tab_id: TabId,
+        url: &str,
+        proxy: &EventLoopProxy<Event>,
+    ) -> Result<Self, Box<dyn Error>> {
         let _mtm = MainThreadMarker::new().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -138,8 +399,7 @@ impl WebView {
                     "Failed to allocate WKWebViewConfiguration",
                 )
             })?;
-            enable_web_authentication(&*config)?;
-            enable_web_inspector(&*config)?;
+            configure_webview_config(&*config)?;
             let store: *mut AnyObject =
                 unsafe { msg_send![class!(WKWebsiteDataStore), defaultDataStore] };
             unsafe {
@@ -158,10 +418,77 @@ impl WebView {
                 let _: () = msg_send![parent, addSubview: &*view];
             }
 
-            let mut web_view = Self { view, last_title: None, last_url: None };
+            let delegate = WebViewDelegate::new(proxy.clone(), window.id());
+            let delegate = unsafe { Retained::cast_unchecked(delegate) };
+            set_webview_delegate(&view, &delegate);
+            register_webview_tab(&view, tab_id);
+            apply_safari_user_agent(&view)?;
+
+            let mut web_view = Self {
+                view,
+                last_title: None,
+                last_url: None,
+                _delegate: delegate,
+            };
             let initial_url = if url.is_empty() { "about:blank" } else { url };
             web_view.load_url(initial_url);
             Ok(web_view)
+        })();
+
+        if result.is_err() {
+            super::unregister_webview();
+        }
+
+        result
+    }
+
+    pub fn from_existing(
+        window: &Window,
+        size_info: &SizeInfo,
+        tab_id: TabId,
+        view: Retained<AnyObject>,
+        delegate: Retained<AnyObject>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let _mtm = MainThreadMarker::new().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "WebView must be created on main thread",
+            )
+        })?;
+
+        super::register_webview();
+        install_mouse_monitor()?;
+        let result = (|| {
+            let parent = ns_view(window)?;
+            let config: *mut AnyObject = unsafe { msg_send![&*view, configuration] };
+            let config = unsafe { config.as_ref() }.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "WKWebView has no configuration",
+                )
+            })?;
+            configure_webview_config(config)?;
+
+            unsafe {
+                let _: () = msg_send![parent, addSubview: &*view];
+            }
+
+            let frame = webview_frame(window, size_info);
+            unsafe {
+                let _: () = msg_send![&*view, setFrame: frame];
+                let _: () = msg_send![&*view, setHidden: true];
+            }
+
+            set_webview_delegate(&view, &delegate);
+            register_webview_tab(&view, tab_id);
+            apply_safari_user_agent(&view)?;
+
+            Ok(Self {
+                view,
+                last_title: None,
+                last_url: None,
+                _delegate: delegate,
+            })
         })();
 
         if result.is_err() {
@@ -493,6 +820,25 @@ fn enable_web_inspector(config: &AnyObject) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn enable_web_popups(config: &AnyObject) -> Result<(), Box<dyn Error>> {
+    let prefs: *mut AnyObject = unsafe { msg_send![config, preferences] };
+    if prefs.is_null() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "WKWebViewConfiguration has no preferences",
+        )
+        .into());
+    }
+
+    let enabled = NSNumber::numberWithBool(true);
+    let key = NSString::from_str("javaScriptCanOpenWindowsAutomatically");
+    unsafe {
+        let _: () = msg_send![prefs, setValue: &*enabled, forKey: &*key];
+    }
+
+    Ok(())
+}
+
 // WebAuthn/passkeys are guarded by WebKit preferences; enable them explicitly.
 fn enable_web_authentication(config: &AnyObject) -> Result<(), Box<dyn Error>> {
     type WebAuthGet = unsafe extern "C" fn(*mut AnyObject) -> Bool;
@@ -545,6 +891,7 @@ fn enable_web_authentication(config: &AnyObject) -> Result<(), Box<dyn Error>> {
 
 impl Drop for WebView {
     fn drop(&mut self) {
+        unregister_webview_tab(&self.view);
         unsafe {
             let _: () = msg_send![&*self.view, removeFromSuperview];
         }

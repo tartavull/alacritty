@@ -15,6 +15,8 @@ use glutin::display::GetGlDisplay;
 #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
 use glutin::platform::x11::X11GlConfigExt;
 use log::info;
+#[cfg(target_os = "macos")]
+use serde::Deserialize;
 use serde_json as json;
 use winit::event::{Event as WinitEvent, Ime, Modifiers, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
@@ -72,7 +74,9 @@ use crate::macos::web_commands::WebCommandState;
 #[cfg(target_os = "macos")]
 use crate::macos::favicon::{fetch_favicon, resolve_favicon_url, FaviconImage};
 #[cfg(target_os = "macos")]
-use crate::macos::webview::WebView;
+use crate::macos::webview::{take_pending_popup, PendingPopup, WebView};
+#[cfg(not(target_os = "macos"))]
+type PendingPopup = ();
 #[cfg(target_os = "macos")]
 use crate::macos::remote_inspector::{
     match_tab_for_target, match_target_for_tab, InspectorError, InspectorTabInfo,
@@ -120,9 +124,56 @@ struct ClosedTab {
 const WEB_FAVICON_JS: &str = r#"
 (() => {
   const link = document.querySelector('link[rel~="icon"]');
-  return link && link.href ? link.href : '';
+  const href = link ? (link.getAttribute("href") || link.href || "") : "";
+  const baseURI = document.baseURI || "";
+  const referrer = document.referrer || "";
+  return JSON.stringify({ href, baseURI, referrer });
 })()
 "#;
+
+#[cfg(target_os = "macos")]
+#[derive(Deserialize)]
+struct WebFaviconHint {
+    #[serde(default)]
+    href: String,
+    #[serde(default, rename = "baseURI")]
+    base_uri: String,
+    #[serde(default)]
+    referrer: String,
+}
+
+#[cfg(target_os = "macos")]
+fn parse_web_favicon_hint(raw: &str) -> WebFaviconHint {
+    json::from_str(raw).unwrap_or_else(|_| WebFaviconHint {
+        href: raw.to_string(),
+        base_uri: String::new(),
+        referrer: String::new(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn is_unhelpful_favicon_base(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower == "about:blank" || lower.starts_with("about:") || lower.starts_with("data:")
+}
+
+#[cfg(target_os = "macos")]
+fn select_favicon_base(page_url: &str, base_uri: &str, referrer: &str) -> String {
+    if !is_unhelpful_favicon_base(page_url) {
+        return page_url.to_string();
+    }
+    if !is_unhelpful_favicon_base(base_uri) {
+        return base_uri.to_string();
+    }
+    if !is_unhelpful_favicon_base(referrer) {
+        return referrer.to_string();
+    }
+    page_url.to_string()
+}
 
 impl TabState {
     fn panel_title(&self) -> String {
@@ -681,8 +732,15 @@ impl WindowContext {
         let mut tabs = TabManager::new();
         let mut pty_config = config.pty_config();
         options.terminal_options.override_pty_config(&mut pty_config);
-        let first_tab =
-            Self::spawn_tab(&mut tabs, &display, &config, pty_config, &proxy, options.window_kind)?;
+        let first_tab = Self::spawn_tab(
+            &mut tabs,
+            &display,
+            &config,
+            pty_config,
+            &proxy,
+            options.window_kind,
+            None,
+        )?;
 
         // Create context for the Tabor window.
         let mut context = WindowContext {
@@ -720,6 +778,7 @@ impl WindowContext {
         pty_config: tty::Options,
         proxy: &EventLoopProxy<Event>,
         window_kind: WindowKind,
+        pending_popup: Option<PendingPopup>,
     ) -> Result<TabId, Box<dyn Error>> {
         let tab_id = tabs.allocate_id();
         let event_proxy = EventProxy::new(proxy.clone(), display.window.id(), tab_id);
@@ -750,6 +809,9 @@ impl WindowContext {
         }
 
         #[cfg(not(target_os = "macos"))]
+        let _ = pending_popup;
+
+        #[cfg(not(target_os = "macos"))]
         if matches!(window_kind, WindowKind::Web { .. }) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -759,9 +821,29 @@ impl WindowContext {
         }
 
         #[cfg(target_os = "macos")]
-        let web_view = match &window_kind {
-            WindowKind::Web { url } => Some(WebView::new(&display.window, &display.size_info, url)?),
-            WindowKind::Terminal => None,
+        let web_view = match (&window_kind, pending_popup) {
+            (WindowKind::Web { url }, None) => Some(WebView::new(
+                &display.window,
+                &display.size_info,
+                tab_id,
+                url,
+                proxy,
+            )?),
+            (WindowKind::Web { .. }, Some(popup)) => Some(WebView::from_existing(
+                &display.window,
+                &display.size_info,
+                tab_id,
+                popup.view,
+                popup.delegate,
+            )?),
+            (WindowKind::Terminal, None) => None,
+            (WindowKind::Terminal, Some(_)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Popup WebView requires a web tab",
+                )
+                .into());
+            },
         };
 
         let title = match &window_kind {
@@ -1049,8 +1131,9 @@ impl WindowContext {
         let proxy = event_proxy.clone();
         let window_id = self.display.window.id();
         web_view.eval_js_string(WEB_FAVICON_JS, move |result| {
-            let hint = result.unwrap_or_default();
-            let icon_url = resolve_favicon_url(&page_url, &hint);
+            let hint = parse_web_favicon_hint(&result.unwrap_or_default());
+            let base_url = select_favicon_base(&page_url, &hint.base_uri, &hint.referrer);
+            let icon_url = resolve_favicon_url(&base_url, &hint.href);
 
             match icon_url {
                 Some(icon_url) => {
@@ -1259,6 +1342,15 @@ impl WindowContext {
         options: WindowOptions,
         proxy: &EventLoopProxy<Event>,
     ) -> Result<TabId, Box<dyn Error>> {
+        self.create_tab_with_popup(options, proxy, None)
+    }
+
+    fn create_tab_with_popup(
+        &mut self,
+        options: WindowOptions,
+        proxy: &EventLoopProxy<Event>,
+        pending_popup: Option<PendingPopup>,
+    ) -> Result<TabId, Box<dyn Error>> {
         let mut pty_config = self.config.pty_config();
         options.terminal_options.override_pty_config(&mut pty_config);
         let command_input = options.command_input.clone();
@@ -1269,6 +1361,7 @@ impl WindowContext {
             pty_config,
             proxy,
             options.window_kind,
+            pending_popup,
         )?;
         self.set_active_tab(tab_id);
         if let Some(input) = command_input.as_deref() {
@@ -1280,6 +1373,28 @@ impl WindowContext {
             }
         }
         Ok(tab_id)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn create_web_popup_tab(
+        &mut self,
+        popup_id: usize,
+        proxy: &EventLoopProxy<Event>,
+    ) -> Result<TabId, Box<dyn Error>> {
+        let Some(popup) = take_pending_popup(popup_id) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Popup WebView not found",
+            )
+            .into());
+        };
+
+        let mut options = WindowOptions::default();
+        options.window_kind = WindowKind::Web {
+            url: popup.url.clone().unwrap_or_default(),
+        };
+
+        self.create_tab_with_popup(options, proxy, Some(popup))
     }
 
     pub(crate) fn handle_tab_command(&mut self, command: crate::tabs::TabCommand) {

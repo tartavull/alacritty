@@ -13,8 +13,8 @@ use block2::Block;
 use core_foundation::base::{CFIndex, CFOptionFlags, CFRelease, CFTypeRef};
 use core_foundation::date::CFAbsoluteTimeGetCurrent;
 use core_foundation::runloop::{
-    kCFRunLoopAfterWaiting, kCFRunLoopBeforeWaiting, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
-    kCFRunLoopExit, CFRunLoopActivity, CFRunLoopAddObserver, CFRunLoopAddTimer, CFRunLoopGetMain,
+    kCFRunLoopAfterWaiting, kCFRunLoopBeforeWaiting, kCFRunLoopCommonModes, kCFRunLoopExit,
+    CFRunLoopActivity, CFRunLoopAddObserver, CFRunLoopAddTimer, CFRunLoopGetMain,
     CFRunLoopObserverCallBack, CFRunLoopObserverContext, CFRunLoopObserverCreate,
     CFRunLoopObserverRef, CFRunLoopRef, CFRunLoopTimerCreate, CFRunLoopTimerInvalidate,
     CFRunLoopTimerRef, CFRunLoopTimerSetNextFireDate, CFRunLoopWakeUp,
@@ -186,16 +186,9 @@ impl RunLoop {
         // - `NSModalPanelRunLoopMode`, used when running a modal inside the Winit event loop.
         // - `NSConnectionReplyMode`: TODO.
         //
-        // We only want to run event handlers in the default mode, as we support running a blocking
-        // modal inside a Winit event handler (see [#1779]) which outrules the modal panel mode, and
-        // resizing such panel window enters the event tracking run loop mode, so we can't directly
-        // trigger events inside that mode either.
-        //
-        // Any events that are queued while running a modal or when live-resizing will instead wait,
-        // and be delivered to the application afterwards.
-        //
-        // [#1779]: https://github.com/rust-windowing/winit/issues/1779
-        let mode = unsafe { kCFRunLoopDefaultMode as CFTypeRef };
+        // Run in common modes so queued closures still execute during modal/event-tracking loops
+        // (e.g. privacy permission sheets), otherwise the app can appear hung.
+        let mode = unsafe { kCFRunLoopCommonModes as CFTypeRef };
 
         // SAFETY: The runloop is valid, the mode is a `CFStringRef`, and the block is `'static`.
         unsafe { CFRunLoopPerformBlock(self.0, mode, &block) }

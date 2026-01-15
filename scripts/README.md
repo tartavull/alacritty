@@ -24,3 +24,20 @@ all the colors of a standard terminal. The third enumerates the 24-bit colors.
 ./colors.sh
 ./24-bit-colors.sh
 ```
+
+## Web popup smoke test (macOS)
+
+Runs a popup smoke test using IPC to verify `window.open` creates a new web tab
+and `window.opener.postMessage` reaches the opener. The popup is created from
+`about:blank` with a `link[rel="icon"]` so the script also checks that a favicon
+request hits the local HTTP server. Requires macOS and `python3`. If
+`./target/debug/tabor` exists it is used automatically, otherwise `tabor` is
+resolved from `PATH`.
+
+```sh
+./web-popup-smoke.sh
+```
+
+Environment overrides:
+- `TABOR_BIN` to point at a custom Tabor binary.
+- `PYTHON_BIN` to use a different Python executable.

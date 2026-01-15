@@ -824,6 +824,14 @@ impl ApplicationHandler<Event> for Processor {
                 }
             },
             #[cfg(target_os = "macos")]
+            (EventType::WebPopup { popup_id }, Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(&window_id) {
+                    if let Err(err) = window_context.create_web_popup_tab(popup_id, &self.proxy) {
+                        error!("Could not create popup tab: {err:?}");
+                    }
+                }
+            },
+            #[cfg(target_os = "macos")]
             (EventType::RestoreTab, Some(window_id)) => {
                 if let Some(window_context) = self.windows.get_mut(&window_id) {
                     if let Err(err) = window_context.restore_closed_tab(&self.proxy) {
@@ -1151,6 +1159,8 @@ pub enum EventType {
     TabCommand(TabCommand),
     #[cfg(target_os = "macos")]
     WebCommand(WebCommand),
+    #[cfg(target_os = "macos")]
+    WebPopup { popup_id: usize },
     #[cfg(target_os = "macos")]
     WebFavicon { page_url: String, icon: Option<FaviconImage> },
     #[cfg(target_os = "macos")]
@@ -3923,6 +3933,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 | EventType::UpdateTabProgramName
                 | EventType::TabActivityTick
                 | EventType::CloseTab(_)
+                | EventType::WebPopup { .. }
                 | EventType::RestoreTab
                 | EventType::WebFavicon { .. }
                 | EventType::WebCursor { .. }
