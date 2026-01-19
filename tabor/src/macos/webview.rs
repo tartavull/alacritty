@@ -534,6 +534,20 @@ impl WebView {
             return false;
         }
 
+        let scheme: *mut AnyObject = unsafe { msg_send![ns_url, scheme] };
+        if !scheme.is_null() {
+            let scheme = unsafe { &*(scheme as *const NSString) }.to_string();
+            if scheme == "file" {
+                let access_url: *mut AnyObject =
+                    unsafe { msg_send![ns_url, URLByDeletingLastPathComponent] };
+                let access_url = if access_url.is_null() { ns_url } else { access_url };
+                let _: *mut AnyObject = unsafe {
+                    msg_send![&*self.view, loadFileURL: ns_url, allowingReadAccessToURL: access_url]
+                };
+                return true;
+            }
+        }
+
         let request: *mut AnyObject =
             unsafe { msg_send![class!(NSURLRequest), requestWithURL: ns_url] };
         let _: *mut AnyObject = unsafe { msg_send![&*self.view, loadRequest: request] };
@@ -777,27 +791,16 @@ impl WebView {
     }
 
     pub fn show_inspector(&mut self) -> bool {
-        let selectors = [
-            sel!(showWebInspector),
-            sel!(showInspector),
-            sel!(_showInspector),
-            sel!(_showWebInspector),
-            sel!(toggleWebInspector),
-            sel!(toggleInspector),
-            sel!(_toggleInspector),
-        ];
-
-        for selector in selectors {
-            let responds: Bool = unsafe { msg_send![&*self.view, respondsToSelector: selector] };
-            if responds.as_bool() {
-                unsafe {
-                    let _: *mut AnyObject = msg_send![&*self.view, performSelector: selector];
-                }
-                return true;
-            }
+        let inspector: *mut AnyObject = unsafe { msg_send![&*self.view, _inspector] };
+        if inspector.is_null() {
+            return false;
         }
 
-        false
+        unsafe {
+            let _: () = msg_send![inspector, show];
+        }
+
+        true
     }
 }
 
