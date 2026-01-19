@@ -32,6 +32,25 @@
   <true/>
   <key>CFBundleDisplayName</key>
   <string>Tabor</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>PDF Document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>com.adobe.pdf</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>pdf</string>
+      </array>
+    </dict>
+  </array>
   <key>NSRequiresAquaSystemAppearance</key>
   <string>NO</string>
   <key>NSAppTransportSecurity</key>

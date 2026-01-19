@@ -12,13 +12,16 @@ use objc2_foundation::{NSDictionary, NSString, NSUserDefaults, ns_string};
 #[link(name = "AuthenticationServices", kind = "framework")]
 unsafe extern "C" {}
 
+pub mod favicon;
 pub mod locale;
+pub mod open_documents;
 pub mod proc;
+pub mod remote_inspector;
 pub mod web_commands;
 pub mod web_cursor;
-pub mod favicon;
-pub mod remote_inspector;
 pub mod webview;
+
+pub(crate) use open_documents::register_open_documents_handler;
 
 static WEBVIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PASSKEY_AUTH_REQUESTED: AtomicBool = AtomicBool::new(false);

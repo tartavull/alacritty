@@ -131,6 +131,9 @@ pub struct ViewState {
     /// to the application, even during IME
     forward_key_to_app: Cell<bool>,
 
+    /// True while processing a keyDown event.
+    ime_in_key_down: Cell<bool>,
+
     marked_text: RefCell<Retained<NSMutableAttributedString>>,
     accepts_first_mouse: bool,
 
@@ -263,8 +266,13 @@ declare_class!(
         #[method(selectedRange)]
         fn selected_range(&self) -> NSRange {
             trace_scope!("selectedRange");
-            // Documented to return `{NSNotFound, 0}` if there is no selection.
-            NSRange::new(NSNotFound as NSUInteger, 0)
+            // Return a valid caret position when IME is allowed, so dictation can start.
+            if self.ivars().ime_allowed.get() {
+                NSRange::new(0, 0)
+            } else {
+                // Documented to return `{NSNotFound, 0}` if there is no selection.
+                NSRange::new(NSNotFound as NSUInteger, 0)
+            }
         }
 
         #[method(setMarkedText:selectedRange:replacementRange:)]
@@ -355,11 +363,16 @@ declare_class!(
         #[method_id(attributedSubstringForProposedRange:actualRange:)]
         fn attributed_substring_for_proposed_range(
             &self,
-            _range: NSRange,
+            range: NSRange,
             _actual_range: *mut NSRange,
         ) -> Option<Retained<NSAttributedString>> {
             trace_scope!("attributedSubstringForProposedRange:actualRange:");
-            None
+            if self.ivars().ime_allowed.get() && range.length == 0 {
+                let empty = NSString::from_str("");
+                Some(NSAttributedString::from_nsstring(&empty))
+            } else {
+                None
+            }
         }
 
         #[method(characterIndexForPoint:)]
@@ -401,10 +414,25 @@ declare_class!(
             };
 
             let is_control = string.chars().next().is_some_and(|c| c.is_control());
+            if !self.ivars().ime_allowed.get() || is_control {
+                return;
+            }
 
-            // Commit only if we have marked text.
-            if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
+            let has_marked_text = unsafe { self.hasMarkedText() };
+
+            // Commit marked text from IME input.
+            if has_marked_text && self.is_ime_enabled() {
                 self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+                self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
+                self.ivars().ime_state.set(ImeState::Committed);
+            } else if !has_marked_text
+                && (!self.ivars().ime_in_key_down.get() || string.chars().count() > 1)
+            {
+                // Accept non-keyDown insertText (dictation, replacements) without marked text.
+                if self.ivars().ime_state.get() == ImeState::Disabled {
+                    self.ivars().ime_state.set(ImeState::Ground);
+                    self.queue_event(WindowEvent::Ime(Ime::Enabled));
+                }
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_state.set(ImeState::Committed);
             }
@@ -458,6 +486,7 @@ declare_class!(
             // we must send the `KeyboardInput` event during IME if it triggered
             // `doCommandBySelector`. (doCommandBySelector means that the keyboard input
             // is not handled by IME and should be handled by the application)
+            self.ivars().ime_in_key_down.set(true);
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
@@ -468,6 +497,7 @@ declare_class!(
                     *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
                 }
             }
+            self.ivars().ime_in_key_down.set(false);
 
             self.update_modifiers(&event, false);
 
@@ -798,6 +828,7 @@ impl WinitView {
             input_source: Default::default(),
             ime_allowed: Default::default(),
             forward_key_to_app: Default::default(),
+            ime_in_key_down: Default::default(),
             marked_text: Default::default(),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),

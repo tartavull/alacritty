@@ -92,6 +92,7 @@ const SHORTENER: char = '…';
 
 /// Color which is used to highlight damaged rects when debugging.
 const DAMAGE_RECT_COLOR: Rgb = Rgb::new(255, 0, 255);
+const MESSAGE_BAR_TEXT_INSET_PX: f32 = 1.0;
 
 #[derive(Debug)]
 pub enum Error {
@@ -1091,9 +1092,13 @@ impl Display {
         if let Some(message) = message_buffer.message() {
             let text = message.text(&size_info);
 
-            // Create a new rectangle for the background.
             let start_line = size_info.screen_lines();
-            let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
+            let text_offset = self.message_bar_text_offset();
+            let background_offset = if text_offset < 0. { text_offset } else { 0. };
+            let extra_height = if text_offset < 0. { -text_offset } else { 0. };
+            let y =
+                size_info.cell_height().mul_add(start_line as f32, size_info.padding_y())
+                    + background_offset;
 
             let bg = match message.ty() {
                 MessageType::Error => config.colors.normal.red,
@@ -1102,12 +1107,7 @@ impl Display {
 
             let x = 0;
             let width = size_info.width() as i32;
-            let height = (size_info.height() - y) as i32;
-            let message_bar_rect =
-                RenderRect::new(x as f32, y, width as f32, height as f32, bg, 1.);
-
-            // Push message_bar in the end, so it'll be above all other content.
-            rects.push(message_bar_rect);
+            let height = (size_info.cell_height() * text.len() as f32 + extra_height) as i32;
 
             // Always damage message bar, since it could have messages of the same size in it.
             self.damage_tracker.frame().add_viewport_rect(&size_info, x, y as i32, width, height);
@@ -1124,17 +1124,15 @@ impl Display {
             );
 
             // Relay messages to the user.
-            let glyph_cache = &mut self.glyph_cache;
             let fg = config.colors.primary.background;
             for (i, message_text) in text.iter().enumerate() {
-                let point = Point::new(start_line + i, Column(0));
-                self.renderer.draw_string(
-                    point,
+                self.draw_footer_bar_line_with_text_offset(
+                    message_text,
                     fg,
                     bg,
-                    message_text.chars(),
-                    &size_info,
-                    glyph_cache,
+                    start_line + i,
+                    0.,
+                    text_offset,
                 );
             }
         } else {
@@ -1199,7 +1197,6 @@ impl Display {
         let metrics = self.glyph_cache.font_metrics();
         let background_color = config.colors.primary.background;
         let command_active = command_state.is_active();
-        let message_lines = message_buffer.message().map_or(0, |m| m.text(&size_info).len());
 
         self.damage_tracker.frame().mark_fully_damaged();
 
@@ -1262,7 +1259,12 @@ impl Display {
             let text = message.text(&size_info);
 
             let start_line = size_info.screen_lines();
-            let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
+            let text_offset = self.message_bar_text_offset();
+            let background_offset = if text_offset < 0. { text_offset } else { 0. };
+            let extra_height = if text_offset < 0. { -text_offset } else { 0. };
+            let y =
+                size_info.cell_height().mul_add(start_line as f32, size_info.padding_y())
+                    + background_offset;
 
             let bg = match message.ty() {
                 MessageType::Error => config.colors.normal.red,
@@ -1271,11 +1273,7 @@ impl Display {
 
             let x = 0;
             let width = size_info.width() as i32;
-            let height = (size_info.cell_height() * message_lines as f32) as i32;
-            let message_bar_rect =
-                RenderRect::new(x as f32, y, width as f32, height as f32, bg, 1.);
-
-            rects.push(message_bar_rect);
+            let height = (size_info.cell_height() * text.len() as f32 + extra_height) as i32;
             self.damage_tracker.frame().add_viewport_rect(&size_info, x, y as i32, width, height);
 
             self.renderer.draw_rects(&size_info, &metrics, rects);
@@ -1283,17 +1281,15 @@ impl Display {
             #[cfg(target_os = "macos")]
             self.tab_panel.draw_text(&size_info, config, &mut self.renderer, &mut self.glyph_cache);
 
-            let glyph_cache = &mut self.glyph_cache;
             let fg = config.colors.primary.background;
             for (i, message_text) in text.iter().enumerate() {
-                let point = Point::new(start_line + i, Column(0));
-                self.renderer.draw_string(
-                    point,
+                self.draw_footer_bar_line_with_text_offset(
+                    message_text,
                     fg,
                     bg,
-                    message_text.chars(),
-                    &size_info,
-                    glyph_cache,
+                    start_line + i,
+                    0.,
+                    text_offset,
                 );
             }
         } else {
@@ -1646,33 +1642,61 @@ impl Display {
         (size_info.height() - grid_bottom).max(0.)
     }
 
-    fn draw_footer_bar_background(&mut self, bg: Rgb, line: usize, offset_y: f32) {
+    fn message_bar_text_offset(&self) -> f32 {
+        let scale = self.window.scale_factor as f32;
+        -(MESSAGE_BAR_TEXT_INSET_PX * scale.max(1.0)).round()
+    }
+
+    fn draw_footer_bar_background_with_height(
+        &mut self,
+        bg: Rgb,
+        line: usize,
+        offset_y: f32,
+        height: f32,
+    ) {
         let y = self
             .size_info
             .cell_height()
             .mul_add(line as f32, self.size_info.padding_y())
             + offset_y;
-        let height = self.size_info.cell_height();
         let rect = RenderRect::new(0., y, self.size_info.width(), height, bg, 1.);
         let metrics = self.glyph_cache.font_metrics();
         self.renderer.draw_rects(&self.size_info, &metrics, vec![rect]);
     }
 
-    /// Draw current search regex.
-    #[inline(never)]
-    fn draw_search(&mut self, config: &UiConfig, text: &str, offset_y: f32) {
-        // Assure text length is at least num_cols.
+    fn draw_footer_bar_line(
+        &mut self,
+        text: &str,
+        fg: Rgb,
+        bg: Rgb,
+        line: usize,
+        offset_y: f32,
+    ) {
+        self.draw_footer_bar_line_with_text_offset(text, fg, bg, line, offset_y, 0.);
+    }
+
+    fn draw_footer_bar_line_with_text_offset(
+        &mut self,
+        text: &str,
+        fg: Rgb,
+        bg: Rgb,
+        line: usize,
+        offset_y: f32,
+        text_offset_y: f32,
+    ) {
         let num_cols = self.size_info.columns();
         let text = format!("{text:<num_cols$}");
-
-        let fg = config.colors.footer_bar_foreground();
-        let bg = config.colors.footer_bar_background();
-        let line = self.size_info.screen_lines().saturating_sub(1);
         let point = Point::new(line, Column(0));
 
+        let extra_height = if text_offset_y < 0. { -text_offset_y } else { 0. };
+        let background_offset = if text_offset_y < 0. { offset_y + text_offset_y } else { offset_y };
+        let height = self.size_info.cell_height() + extra_height;
+
+        self.draw_footer_bar_background_with_height(bg, line, background_offset, height);
+
+        let text_offset = offset_y + text_offset_y;
         self.renderer
-            .set_text_projection_with_offset(&self.size_info, (0., offset_y));
-        self.draw_footer_bar_background(bg, line, offset_y);
+            .set_text_projection_with_offset(&self.size_info, (0., text_offset));
 
         self.renderer.draw_string(
             point,
@@ -1686,31 +1710,24 @@ impl Display {
         self.renderer.set_text_projection(&self.size_info);
     }
 
-    /// Draw current command input.
+    /// Draw current search regex.
     #[inline(never)]
-    fn draw_command_bar(&mut self, config: &UiConfig, text: &str, offset_y: f32) {
-        let num_cols = self.size_info.columns();
-        let text = format!("{text:<num_cols$}");
-
+    fn draw_search(&mut self, config: &UiConfig, text: &str, offset_y: f32) {
         let fg = config.colors.footer_bar_foreground();
         let bg = config.colors.footer_bar_background();
         let line = self.size_info.screen_lines().saturating_sub(1);
-        let point = Point::new(line, Column(0));
 
-        self.renderer
-            .set_text_projection_with_offset(&self.size_info, (0., offset_y));
-        self.draw_footer_bar_background(bg, line, offset_y);
+        self.draw_footer_bar_line(text, fg, bg, line, offset_y);
+    }
 
-        self.renderer.draw_string(
-            point,
-            fg,
-            bg,
-            text.chars(),
-            &self.size_info,
-            &mut self.glyph_cache,
-        );
+    /// Draw current command input.
+    #[inline(never)]
+    fn draw_command_bar(&mut self, config: &UiConfig, text: &str, offset_y: f32) {
+        let fg = config.colors.footer_bar_foreground();
+        let bg = config.colors.footer_bar_background();
+        let line = self.size_info.screen_lines().saturating_sub(1);
 
-        self.renderer.set_text_projection(&self.size_info);
+        self.draw_footer_bar_line(text, fg, bg, line, offset_y);
     }
 
     /// Draw render timer.

@@ -761,6 +761,11 @@ impl WindowContext {
             display.size_info.columns()
         );
 
+        let command_input = if matches!(&options.window_kind, WindowKind::Terminal) {
+            options.terminal_options.command_input()
+        } else {
+            None
+        };
         let mut tabs = TabManager::new();
         let mut pty_config = config.pty_config();
         options.terminal_options.override_pty_config(&mut pty_config);
@@ -801,6 +806,7 @@ impl WindowContext {
         };
 
         context.set_active_tab(first_tab);
+        context.send_startup_input(first_tab, command_input);
         context.refresh_tab_panel();
         Ok(context)
     }
@@ -1400,6 +1406,11 @@ impl WindowContext {
         group_id: Option<usize>,
         group_name: Option<String>,
     ) -> Result<TabId, Box<dyn Error>> {
+        let terminal_command_input = if matches!(&options.window_kind, WindowKind::Terminal) {
+            options.terminal_options.command_input()
+        } else {
+            None
+        };
         let mut pty_config = self.config.pty_config();
         options.terminal_options.override_pty_config(&mut pty_config);
         let command_input = options.command_input.clone();
@@ -1415,6 +1426,7 @@ impl WindowContext {
             group_name,
         )?;
         self.set_active_tab(tab_id);
+        self.send_startup_input(tab_id, terminal_command_input);
         if let Some(input) = command_input.as_deref() {
             if let Some(active_tab) = self.tabs.active_mut() {
                 active_tab.command_state.start_with_input(':', input);
@@ -1424,6 +1436,19 @@ impl WindowContext {
             }
         }
         Ok(tab_id)
+    }
+
+    fn send_startup_input(&mut self, tab_id: TabId, input: Option<String>) {
+        let Some(mut input) = input else {
+            return;
+        };
+        if !input.ends_with('\n') {
+            input.push('\n');
+        }
+        let Some(tab) = self.tabs.get(tab_id) else {
+            return;
+        };
+        tab.notifier.notify(input.into_bytes());
     }
 
     #[cfg(target_os = "macos")]

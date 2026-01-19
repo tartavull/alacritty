@@ -252,6 +252,8 @@ pub struct Processor {
     scheduler: Scheduler,
     initial_window_options: Option<WindowOptions>,
     initial_window_error: Option<Box<dyn Error>>,
+    #[cfg(target_os = "macos")]
+    pending_open_urls: Vec<String>,
     windows: HashMap<WindowId, WindowContext, RandomState>,
     proxy: EventLoopProxy<Event>,
     gl_config: Option<GlutinConfig>,
@@ -452,6 +454,8 @@ impl Processor {
         Processor {
             initial_window_options,
             initial_window_error: None,
+            #[cfg(target_os = "macos")]
+            pending_open_urls: Vec::new(),
             cli_options,
             proxy,
             scheduler,
@@ -515,6 +519,65 @@ impl Processor {
         let window_id = window_context.id();
         self.windows.insert(window_id, window_context);
         Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn handle_open_urls(&mut self, urls: Vec<String>) {
+        let mut urls = urls
+            .into_iter()
+            .map(|url| normalize_web_url(&url))
+            .filter(|url| !url.is_empty())
+            .collect::<Vec<_>>();
+
+        if urls.is_empty() {
+            return;
+        }
+
+        let window_id = self
+            .windows
+            .iter()
+            .find_map(|(id, window)| window.is_focused().then_some(*id))
+            .or_else(|| self.windows.keys().next().copied());
+
+        let Some(window_id) = window_id else {
+            self.pending_open_urls.append(&mut urls);
+            return;
+        };
+
+        if let Some(window_context) = self.windows.get_mut(&window_id) {
+            for url in urls {
+                if let Err(err) = window_context.open_web_url_new_tab(url, &self.proxy) {
+                    error!("Could not open URL: {err:?}");
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn open_pending_urls(&mut self) {
+        if self.pending_open_urls.is_empty() {
+            return;
+        }
+
+        let Some(window_id) = self.windows.keys().next().copied() else {
+            return;
+        };
+
+        let Some(window_context) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+
+        let urls = mem::take(&mut self.pending_open_urls);
+        for url in urls {
+            let url = normalize_web_url(&url);
+            if url.is_empty() {
+                continue;
+            }
+
+            if let Err(err) = window_context.open_web_url_new_tab(url, &self.proxy) {
+                error!("Could not open URL: {err:?}");
+            }
+        }
     }
 
     fn ensure_tab_activity_tick(&mut self, window_id: WindowId) {
@@ -750,6 +813,8 @@ impl ApplicationHandler<Event> for Processor {
                 event_loop.exit();
                 return;
             }
+            #[cfg(target_os = "macos")]
+            self.open_pending_urls();
         }
 
         info!("Initialisation complete");
@@ -853,6 +918,10 @@ impl ApplicationHandler<Event> for Processor {
                 if let Some(window_context) = self.windows.get_mut(&window_id) {
                     window_context.select_tab_by_query(&query);
                 }
+            },
+            #[cfg(target_os = "macos")]
+            (EventType::OpenUrls(urls), _) => {
+                self.handle_open_urls(urls);
             },
             (EventType::ConfigReload(path), _) => {
                 // Clear config logs from message bar for all terminals.
@@ -1182,6 +1251,8 @@ pub enum EventType {
     RestoreTab,
     #[cfg(target_os = "macos")]
     TabSearch(String),
+    #[cfg(target_os = "macos")]
+    OpenUrls(Vec<String>),
     #[cfg(unix)]
     IpcRequest(IpcRequest, Arc<UnixStream>),
     BlinkCursor,
@@ -3948,6 +4019,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 | EventType::WebCursor { .. }
                 | EventType::WebCursorRequest
                 | EventType::TabSearch(_)
+                | EventType::OpenUrls(_)
                 | EventType::Frame => (),
                 #[cfg(not(target_os = "macos"))]
                 EventType::Message(_)

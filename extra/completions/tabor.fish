@@ -28,7 +28,7 @@ complete -c tabor -n "__fish_tabor_needs_command" -l embed -d 'X11 window ID to 
 complete -c tabor -n "__fish_tabor_needs_command" -l config-file -d 'Specify alternative configuration file [default: $HOME/.config/tabor/tabor.toml]' -r -F
 complete -c tabor -n "__fish_tabor_needs_command" -l socket -d 'Path for IPC socket creation' -r -F
 complete -c tabor -n "__fish_tabor_needs_command" -l working-directory -d 'Start the shell in the specified working directory' -r -F
-complete -c tabor -n "__fish_tabor_needs_command" -s e -l command -d 'Command and args to execute (must be last argument)' -r
+complete -c tabor -n "__fish_tabor_needs_command" -s e -l command -d 'Command and args to execute in the default shell (must be last argument)' -r
 complete -c tabor -n "__fish_tabor_needs_command" -s T -l title -d 'Defines the window title [default: Tabor]' -r
 complete -c tabor -n "__fish_tabor_needs_command" -l class -d 'Defines window class/app_id on X11/Wayland [default: Tabor]' -r
 complete -c tabor -n "__fish_tabor_needs_command" -s o -l option -d 'Override configuration file options [example: \'cursor.style="Beam"\']' -r
@@ -86,7 +86,7 @@ complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcomm
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l group-id -d 'Target group id for the new tab' -r
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l group-name -d 'Target group name for the new tab' -r
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l working-directory -d 'Start the shell in the specified working directory' -r -F
-complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -s e -l command -d 'Command and args to execute (must be last argument)' -r
+complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -s e -l command -d 'Command and args to execute in the default shell (must be last argument)' -r
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -s T -l title -d 'Defines the window title [default: Tabor]' -r
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l class -d 'Defines window class/app_id on X11/Wayland [default: Tabor]' -r
 complete -c tabor -n "__fish_tabor_using_subcommand msg; and __fish_seen_subcommand_from create-tab" -l hold -d 'Remain open after child process exit'

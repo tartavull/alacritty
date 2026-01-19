@@ -19,8 +19,8 @@ _tabor() {
 '--config-file=[Specify alternative configuration file \[default\: \$HOME/.config/tabor/tabor.toml\]]:CONFIG_FILE:_files' \
 '--socket=[Path for IPC socket creation]:SOCKET:_files' \
 '--working-directory=[Start the shell in the specified working directory]:WORKING_DIRECTORY:_files' \
-'*-e+[Command and args to execute (must be last argument)]:COMMAND:_default' \
-'*--command=[Command and args to execute (must be last argument)]:COMMAND:_default' \
+'*-e+[Command and args to execute in the default shell (must be last argument)]:COMMAND:_default' \
+'*--command=[Command and args to execute in the default shell (must be last argument)]:COMMAND:_default' \
 '-T+[Defines the window title \[default\: Tabor\]]:TITLE:_default' \
 '--title=[Defines the window title \[default\: Tabor\]]:TITLE:_default' \
 '--class=[Defines window class/app_id on X11/Wayland \[default\: Tabor\]]:general> | <general>,<instance:_default' \
@@ -111,8 +111,8 @@ _arguments "${_arguments_options[@]}" : \
 '(--group-name)--group-id=[Target group id for the new tab]:GROUP_ID:_default' \
 '(--group-id)--group-name=[Target group name for the new tab]:NAME:_default' \
 '--working-directory=[Start the shell in the specified working directory]:WORKING_DIRECTORY:_files' \
-'*-e+[Command and args to execute (must be last argument)]:COMMAND:_default' \
-'*--command=[Command and args to execute (must be last argument)]:COMMAND:_default' \
+'*-e+[Command and args to execute in the default shell (must be last argument)]:COMMAND:_default' \
+'*--command=[Command and args to execute in the default shell (must be last argument)]:COMMAND:_default' \
 '-T+[Defines the window title \[default\: Tabor\]]:TITLE:_default' \
 '--title=[Defines the window title \[default\: Tabor\]]:TITLE:_default' \
 '--class=[Defines window class/app_id on X11/Wayland \[default\: Tabor\]]:general> | <general>,<instance:_default' \

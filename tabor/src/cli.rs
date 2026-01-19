@@ -15,7 +15,6 @@ use tabor_terminal::tty::Options as PtyOptions;
 use tabor_terminal::vi_mode::ViMotion;
 
 use crate::config::UiConfig;
-use crate::config::ui_config::Program;
 use crate::config::window::{Class, Identity};
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 use crate::window_kind::WindowKind;
@@ -182,6 +181,44 @@ fn parse_hex_or_decimal(input: &str) -> Option<u32> {
         .or_else(|| input.parse().ok())
 }
 
+#[cfg(not(windows))]
+fn shell_escape_arg(input: &str) -> String {
+    if input.is_empty() {
+        return String::from("''");
+    }
+
+    let mut escaped = String::with_capacity(input.len() + 2);
+    escaped.push('\'');
+    for ch in input.chars() {
+        if ch == '\'' {
+            escaped.push_str("'\\''");
+        } else {
+            escaped.push(ch);
+        }
+    }
+    escaped.push('\'');
+    escaped
+}
+
+#[cfg(windows)]
+fn shell_escape_arg(input: &str) -> String {
+    if input.is_empty() {
+        return String::from("''");
+    }
+
+    let mut escaped = String::with_capacity(input.len() + 2);
+    escaped.push('\'');
+    for ch in input.chars() {
+        if ch == '\'' {
+            escaped.push_str("''");
+        } else {
+            escaped.push(ch);
+        }
+    }
+    escaped.push('\'');
+    escaped
+}
+
 /// Terminal specific cli options which can be passed to new windows via IPC.
 #[derive(Serialize, Deserialize, Args, Default, Debug, Clone, PartialEq, Eq)]
 pub struct TerminalOptions {
@@ -193,16 +230,38 @@ pub struct TerminalOptions {
     #[clap(long)]
     pub hold: bool,
 
-    /// Command and args to execute (must be last argument).
+    /// Command and args to execute in the default shell (must be last argument).
     #[clap(short = 'e', long, allow_hyphen_values = true, num_args = 1..)]
     command: Vec<String>,
 }
 
 impl TerminalOptions {
-    /// Shell override passed through the CLI.
-    pub fn command(&self) -> Option<Program> {
+    #[cfg(not(windows))]
+    pub(crate) fn command_input(&self) -> Option<String> {
         let (program, args) = self.command.split_first()?;
-        Some(Program::WithArgs { program: program.clone(), args: args.to_vec() })
+        let mut parts = Vec::with_capacity(self.command.len());
+        parts.push(shell_escape_arg(program));
+        for arg in args {
+            parts.push(shell_escape_arg(arg));
+        }
+        Some(parts.join(" "))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn command_input(&self) -> Option<String> {
+        let (program, args) = self.command.split_first()?;
+        let mut parts = Vec::with_capacity(self.command.len() + 1);
+        let needs_call = program.chars().any(|ch| ch.is_whitespace() || ch == '\'');
+        if needs_call {
+            parts.push(String::from("&"));
+            parts.push(shell_escape_arg(program));
+        } else {
+            parts.push(program.clone());
+        }
+        for arg in args {
+            parts.push(shell_escape_arg(arg));
+        }
+        Some(parts.join(" "))
     }
 
     /// Override the [`PtyOptions`]'s fields with the [`TerminalOptions`].
@@ -215,10 +274,6 @@ impl TerminalOptions {
             }
         }
 
-        if let Some(command) = self.command() {
-            pty_config.shell = Some(command.into());
-        }
-
         pty_config.drain_on_exit |= self.hold;
     }
 }
@@ -227,7 +282,7 @@ impl From<TerminalOptions> for PtyOptions {
     fn from(mut options: TerminalOptions) -> Self {
         PtyOptions {
             working_directory: options.working_directory.take(),
-            shell: options.command().map(Into::into),
+            shell: None,
             drain_on_exit: options.hold,
             env: HashMap::new(),
             #[cfg(target_os = "windows")]

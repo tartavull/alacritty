@@ -452,6 +452,9 @@ fn tabor(mut options: Options) -> Result<(), Box<dyn Error>> {
     // Setup winit event loop.
     let window_event_loop = EventLoop::<Event>::with_user_event().build()?;
 
+    #[cfg(target_os = "macos")]
+    macos::register_open_documents_handler(window_event_loop.create_proxy());
+
     // Initialize the logger as soon as possible as to capture output from other subsystems.
     let log_file = logging::initialize(&options, window_event_loop.create_proxy())
         .expect("Unable to initialize logger");
